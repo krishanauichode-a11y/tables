@@ -1,98 +1,353 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const db = require("./db");
-
-const PORT = process.env.PORT || 3000;
+// server.js
+const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+const cors = require('cors');
 
 const app = express();
+const port = 3000;
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-/* ================= EMPLOYEES ================= */
-app.get("/employees", async (req, res) => {
-  const r = await db.query("SELECT * FROM employees ORDER BY id");
-  res.json(r.rows);
+// Initialize Supabase client
+const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// API Routes
+
+// Get all sales data
+app.get('/api/sales', async (req, res) => {
+  try {
+    const { data: employees, error: empError } = await supabase
+      .from('employees')
+      .select('*');
+    
+    if (empError) throw empError;
+    
+    const { data: dailyBookings, error: dailyError } = await supabase
+      .from('daily_bookings')
+      .select('*');
+    
+    if (dailyError) throw dailyError;
+    
+    const { data: leadSummary, error: summaryError } = await supabase
+      .from('lead_summary')
+      .select('*');
+    
+    if (summaryError) throw summaryError;
+    
+    const { data: monthlyLeads, error: monthlyError } = await supabase
+      .from('monthly_leads')
+      .select('*');
+    
+    if (monthlyError) throw monthlyError;
+    
+    const { data: batchLeads, error: batchError } = await supabase
+      .from('batch_leads')
+      .select('*');
+    
+    if (batchError) throw batchError;
+    
+    const { data: batches, error: batchesError } = await supabase
+      .from('batches')
+      .select('*');
+    
+    if (batchesError) throw batchesError;
+    
+    // Format the data to match the frontend structure
+    const formattedData = {
+      employees: employees.map(e => e.name),
+      dailyBookings: {},
+      leadSummary: {},
+      monthlyLeads: {},
+      batchData: {
+        employees: employees.map(e => e.name),
+        batches: batches,
+        batchLeads: {},
+        thc: {}
+      }
+    };
+    
+    // Format daily bookings
+    employees.forEach(emp => {
+      formattedData.dailyBookings[emp.name] = {};
+      const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
+      empDailyBookings.forEach(booking => {
+        if (!formattedData.dailyBookings[emp.name][booking.month]) {
+          formattedData.dailyBookings[emp.name][booking.month] = {};
+        }
+        formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
+      });
+    });
+    
+    // Format lead summary
+    employees.forEach(emp => {
+      const empSummary = leadSummary.find(s => s.employee_id === emp.id);
+      formattedData.leadSummary[emp.name] = empSummary ? {
+        pre: empSummary.fre,
+        off: empSummary.off,
+        rep: empSummary.rep,
+        app: empSummary.fam
+      } : { pre: 0, off: 0, rep: 0, app: 0 };
+    });
+    
+    // Format monthly leads
+    employees.forEach(emp => {
+      const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
+      formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
+      empMonthly.forEach(month => {
+        formattedData.monthlyLeads[emp.name][month.month] = month.value;
+      });
+    });
+    
+    // Format batch data
+    employees.forEach(emp => {
+      formattedData.batchData.batchLeads[emp.name] = {};
+      batches.forEach(batch => {
+        const batchLead = batchLeads.find(bl => 
+          bl.employee_id === emp.id && bl.batch_id === batch.id
+        );
+        formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
+      });
+    });
+    
+    batches.forEach(batch => {
+      formattedData.batchData.thc[batch.id] = batch.thc || 0;
+    });
+    
+    res.json(formattedData);
+  } catch (error) {
+    console.error('Error fetching sales data:', error);
+    res.status(500).json({ error: 'Failed to fetch sales data' });
+  }
 });
 
-app.post("/employees", async (req, res) => {
-  const { name } = req.body;
-  await db.query(
-    "INSERT INTO employees(name) VALUES($1) ON CONFLICT DO NOTHING",
-    [name]
-  );
-  res.sendStatus(200);
+// Save all sales data
+app.post('/api/sales', async (req, res) => {
+  try {
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData } = req.body;
+    
+    // First, ensure all employees exist
+    for (const empName of employees) {
+      const { data: existingEmp, error: empError } = await supabase
+        .from('employees')
+        .select('id')
+        .eq('name', empName)
+        .single();
+      
+      if (!existingEmp) {
+        await supabase
+          .from('employees')
+          .insert({ name: empName });
+      }
+    }
+    
+    // Get all employee IDs
+    const { data: allEmployees, error: allEmpError } = await supabase
+      .from('employees')
+      .select('id, name');
+    
+    if (allEmpError) throw allEmpError;
+    
+    const empIdMap = {};
+    allEmployees.forEach(emp => {
+      empIdMap[emp.name] = emp.id;
+    });
+    
+    // Save daily bookings
+    for (const empName in dailyBookings) {
+      const empId = empIdMap[empName];
+      if (!empId) continue;
+      
+      for (const month in dailyBookings[empName]) {
+        for (const day in dailyBookings[empName][month]) {
+          const value = dailyBookings[empName][month][day];
+          
+          const { data: existing, error: checkError } = await supabase
+            .from('daily_bookings')
+            .select('id')
+            .eq('employee_id', empId)
+            .eq('month', month)
+            .eq('day', day)
+            .single();
+          
+          if (existing) {
+            await supabase
+              .from('daily_bookings')
+              .update({ value })
+              .eq('id', existing.id);
+          } else {
+            await supabase
+              .from('daily_bookings')
+              .insert({
+                employee_id: empId,
+                month,
+                day,
+                value
+              });
+          }
+        }
+      }
+    }
+    
+    // Save lead summary
+    for (const empName in leadSummary) {
+      const empId = empIdMap[empName];
+      if (!empId) continue;
+      
+      const summary = leadSummary[empName];
+      
+      const { data: existing, error: checkError } = await supabase
+        .from('lead_summary')
+        .select('id')
+        .eq('employee_id', empId)
+        .single();
+      
+      if (existing) {
+        await supabase
+          .from('lead_summary')
+          .update({
+            fre: summary.pre,
+            off: summary.off,
+            rep: summary.rep,
+            fam: summary.app
+          })
+          .eq('id', existing.id);
+      } else {
+        await supabase
+          .from('lead_summary')
+          .insert({
+            employee_id: empId,
+            fre: summary.pre,
+            off: summary.off,
+            rep: summary.rep,
+            fam: summary.app
+          });
+      }
+    }
+    
+    // Save monthly leads
+    for (const empName in monthlyLeads) {
+      const empId = empIdMap[empName];
+      if (!empId) continue;
+      
+      for (let month = 0; month < 12; month++) {
+        const value = monthlyLeads[empName][month];
+        
+        const { data: existing, error: checkError } = await supabase
+          .from('monthly_leads')
+          .select('id')
+          .eq('employee_id', empId)
+          .eq('month', month)
+          .single();
+        
+        if (existing) {
+          await supabase
+            .from('monthly_leads')
+            .update({ value })
+            .eq('id', existing.id);
+        } else {
+          await supabase
+            .from('monthly_leads')
+            .insert({
+              employee_id: empId,
+              month,
+              value
+            });
+        }
+      }
+    }
+    
+    // Save batch data
+    if (batchData) {
+      // Save batches
+      for (const batch of batchData.batches) {
+        const { data: existing, error: checkError } = await supabase
+          .from('batches')
+          .select('id')
+          .eq('id', batch.id)
+          .single();
+        
+        if (existing) {
+          await supabase
+            .from('batches')
+            .update({
+              label: batch.label,
+              thc: batchData.thc[batch.id] || 0
+            })
+            .eq('id', batch.id);
+        } else {
+          await supabase
+            .from('batches')
+            .insert({
+              id: batch.id,
+              label: batch.label,
+              thc: batchData.thc[batch.id] || 0
+            });
+        }
+      }
+      
+      // Save batch leads
+      for (const empName in batchData.batchLeads) {
+        const empId = empIdMap[empName];
+        if (!empId) continue;
+        
+        for (const batchId in batchData.batchLeads[empName]) {
+          const value = batchData.batchLeads[empName][batchId];
+          
+          const { data: existing, error: checkError } = await supabase
+            .from('batch_leads')
+            .select('id')
+            .eq('employee_id', empId)
+            .eq('batch_id', batchId)
+            .single();
+          
+          if (existing) {
+            await supabase
+              .from('batch_leads')
+              .update({ value })
+              .eq('id', existing.id);
+          } else {
+            await supabase
+              .from('batch_leads')
+              .insert({
+                employee_id: empId,
+                batch_id: batchId,
+                value
+              });
+          }
+        }
+      }
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving sales data:', error);
+    res.status(500).json({ error: 'Failed to save sales data' });
+  }
 });
 
-/* ================= DAILY ================= */
-app.post("/daily", async (req, res) => {
-  const { employeeId, month, day, value } = req.body;
-  await db.query(`
-    INSERT INTO daily_bookings(employee_id, month, day, value)
-    VALUES($1,$2,$3,$4)
-    ON CONFLICT (employee_id, month, day)
-    DO UPDATE SET value=$4
-  `, [employeeId, month, day, value]);
-  res.sendStatus(200);
+// Add new employee
+app.post('/api/employee', async (req, res) => {
+  try {
+    const { name } = req.body;
+    
+    const { data, error } = await supabase
+      .from('employees')
+      .insert({ name })
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({ success: true, employee: data[0] });
+  } catch (error) {
+    console.error('Error adding employee:', error);
+    res.status(500).json({ error: 'Failed to add employee' });
+  }
 });
 
-app.get("/daily/:month", async (req, res) => {
-  const r = await db.query(
-    "SELECT * FROM daily_bookings WHERE month=$1",
-    [req.params.month]
-  );
-  res.json(r.rows);
+app.listen(port, () => {
+  console.log(`Server running at http://localhost:${port}`);
 });
-
-/* ================= SUMMARY ================= */
-app.post("/summary", async (req, res) => {
-  const { employeeId, pre, off, rep, app } = req.body;
-  await db.query(`
-    INSERT INTO lead_summary(employee_id, pre, off, rep, app)
-    VALUES($1,$2,$3,$4,$5)
-    ON CONFLICT (employee_id)
-    DO UPDATE SET
-      pre=$2, off=$3, rep=$4, app=$5
-  `,[employeeId, pre, off, rep, app]);
-  res.sendStatus(200);
-});
-
-app.get("/summary", async (req, res) => {
-  const r = await db.query("SELECT * FROM lead_summary");
-  res.json(r.rows);
-});
-
-/* ================= MONTHLY AUTO-CALC ================= */
-app.post("/recalc-monthly", async (req, res) => {
-  await db.query(`
-    INSERT INTO monthly_leads(employee_id, month, total)
-    SELECT employee_id, month, SUM(value)
-    FROM daily_bookings
-    GROUP BY employee_id, month
-    ON CONFLICT (employee_id, month)
-    DO UPDATE SET total=EXCLUDED.total
-  `);
-  res.sendStatus(200);
-});
-
-/* ================= BATCH ================= */
-app.post("/batch", async (req, res) => {
-  const { employeeId, batchId, value } = req.body;
-  await db.query(`
-    INSERT INTO batch_leads(employee_id, batch_id, value)
-    VALUES($1,$2,$3)
-    ON CONFLICT (employee_id, batch_id)
-    DO UPDATE SET value=$3
-  `,[employeeId, batchId, value]);
-  res.sendStatus(200);
-});
-
-/* ================= HEALTH ================= */
-app.get("/test", async (req, res) => {
-  const r = await db.query("SELECT NOW()");
-  res.json(r.rows[0]);
-});
-
-app.listen(process.env.PORT, () =>
-  console.log("🚀 Backend running on port", process.env.PORT)
-);
