@@ -1,14 +1,14 @@
 {
-  "name": "sales-dashboard-backend",
+  "name": "sales-dashboard-api",
   "version": "1.0.0",
+  "description": "Sales Lead Management Dashboard",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "pg": "^8.11.5"
+    "express": "^4.18.2"
   }
 }
