@@ -56,13 +56,6 @@ app.get('/api/sales', async (req, res) => {
     
     if (batchesError) throw batchesError;
     
-    // NEW: Fetch monthly batch admin data
-    const { data: monthlyBatchAdmin, error: monthlyBatchError } = await supabase
-      .from('monthly_batch_admin')
-      .select('*');
-    
-    if (monthlyBatchError) throw monthlyBatchError;
-    
     // Format the data to match the frontend structure
     const formattedData = {
       employees: employees.map(e => e.name),
@@ -74,8 +67,7 @@ app.get('/api/sales', async (req, res) => {
         batches: batches,
         batchLeads: {},
         thc: {}
-      },
-      monthlyBatchData: [] // NEW: Add monthly batch admin data
+      }
     };
     
     // Format daily bookings
@@ -125,32 +117,6 @@ app.get('/api/sales', async (req, res) => {
       formattedData.batchData.thc[batch.id] = batch.thc || 0;
     });
     
-    // NEW: Format monthly batch admin data
-    monthlyBatchAdmin.forEach(record => {
-      const empName = employees.find(e => e.id === record.employee_id)?.name;
-      if (empName) {
-        const leads = [
-          record.jul_10 || 0,
-          record.jul_29 || 0,
-          record.jul_lead || 0,
-          record.aug_19 || 0,
-          record.aug_lead || 0,
-          record.sep_16 || 0,
-          record.sep_lead || 0,
-          record.oct_13 || 0,
-          record.oct_lead || 0,
-          record.nov_lead || 0,
-          record.dec_lead || 0,
-          record.jan_lead || 0
-        ];
-        
-        formattedData.monthlyBatchData.push({
-          name: empName,
-          leads: leads
-        });
-      }
-    });
-    
     res.json(formattedData);
   } catch (error) {
     console.error('Error fetching sales data:', error);
@@ -161,7 +127,7 @@ app.get('/api/sales', async (req, res) => {
 // Save all sales data
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchData } = req.body;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData } = req.body;
     
     // First, ensure all employees exist
     for (const empName of employees) {
@@ -356,44 +322,6 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // NEW: Save monthly batch admin data
-    if (monthlyBatchData) {
-      // First, delete existing records for all employees to avoid duplicates
-      for (const empName of employees) {
-        const empId = empIdMap[empName];
-        if (empId) {
-          await supabase
-            .from('monthly_batch_admin')
-            .delete()
-            .eq('employee_id', empId);
-        }
-      }
-      
-      // Insert new records
-      for (const record of monthlyBatchData) {
-        const empId = empIdMap[record.name];
-        if (!empId) continue;
-        
-        await supabase
-          .from('monthly_batch_admin')
-          .insert({
-            employee_id: empId,
-            jul_10: record.leads[0] || 0,
-            jul_29: record.leads[1] || 0,
-            jul_lead: record.leads[2] || 0,
-            aug_19: record.leads[3] || 0,
-            aug_lead: record.leads[4] || 0,
-            sep_16: record.leads[5] || 0,
-            sep_lead: record.leads[6] || 0,
-            oct_13: record.leads[7] || 0,
-            oct_lead: record.leads[8] || 0,
-            nov_lead: record.leads[9] || 0,
-            dec_lead: record.leads[10] || 0,
-            jan_lead: record.leads[11] || 0
-          });
-      }
-    }
-    
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving sales data:', error);
@@ -420,65 +348,7 @@ app.post('/api/employee', async (req, res) => {
   }
 });
 
-// NEW: Save monthly batch admin data separately
-app.post('/api/monthly-batch', async (req, res) => {
-  try {
-    const { monthlyBatchData } = req.body;
-    
-    // Get all employee IDs
-    const { data: allEmployees, error: allEmpError } = await supabase
-      .from('employees')
-      .select('id, name');
-    
-    if (allEmpError) throw allEmpError;
-    
-    const empIdMap = {};
-    allEmployees.forEach(emp => {
-      empIdMap[emp.name] = emp.id;
-    });
-    
-    // Delete existing records for employees being updated
-    for (const record of monthlyBatchData) {
-      const empId = empIdMap[record.name];
-      if (empId) {
-        await supabase
-          .from('monthly_batch_admin')
-          .delete()
-          .eq('employee_id', empId);
-      }
-    }
-    
-    // Insert new records
-    for (const record of monthlyBatchData) {
-      const empId = empIdMap[record.name];
-      if (!empId) continue;
-      
-      await supabase
-        .from('monthly_batch_admin')
-        .insert({
-          employee_id: empId,
-          jul_10: record.leads[0] || 0,
-          jul_29: record.leads[1] || 0,
-          jul_lead: record.leads[2] || 0,
-          aug_19: record.leads[3] || 0,
-          aug_lead: record.leads[4] || 0,
-          sep_16: record.leads[5] || 0,
-          sep_lead: record.leads[6] || 0,
-          oct_13: record.leads[7] || 0,
-          oct_lead: record.leads[8] || 0,
-          nov_lead: record.leads[9] || 0,
-          dec_lead: record.leads[10] || 0,
-          jan_lead: record.leads[11] || 0
-        });
-    }
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error saving monthly batch data:', error);
-    res.status(500).json({ error: 'Failed to save monthly batch data' });
-  }
-});
-
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
+
