@@ -218,9 +218,7 @@ app.post('/api/employee', async (req, res) => {
   } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
 });
 
-// Catch-all route
-app.get('*', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'index.html')); });
-
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
 
