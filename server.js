@@ -21,7 +21,6 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
 // Initialize Supabase client
 const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
@@ -220,5 +219,6 @@ app.post('/api/employee', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
 
 
