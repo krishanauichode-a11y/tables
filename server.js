@@ -4,6 +4,7 @@
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
+const path = require('path');
 
 // --- App Initialization ---
 const app = express();
@@ -21,7 +22,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- API Routes ---
 
-// Get all sales data (DEFINITIVE VERSION)
+// Get all sales data (UPDATED to handle 15 elements)
 app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
@@ -48,7 +49,7 @@ app.get('/api/sales', async (req, res) => {
     if (batchError) throw batchError; if (batchesError) throw batchesError;
     if (batchAdminError) throw batchAdminError;
     
-    console.log(">>> [DEBUG] Data fetched. Formatting for frontend...");
+    console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
     const formattedData = {
       employees: employees.map(e => e.name),
@@ -65,19 +66,15 @@ app.get('/api/sales', async (req, res) => {
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
       });
     });
-
     employees.forEach(emp => {
       const empSummary = leadSummary.find(s => s.employee_id === emp.id);
       formattedData.leadSummary[emp.name] = empSummary ? { pre: empSummary.fre, off: empSummary.off, rep: empSummary.rep, app: empSummary.fam } : { pre: 0, off: 0, rep: 0, app: 0 };
     });
-
     employees.forEach(emp => {
       const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
       formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
       empMonthly.forEach(month => formattedData.monthlyLeads[emp.name][month.month] = month.value);
     });
-
-    // CORRECTED LOGIC: Use 'batches' array from the database
     employees.forEach(emp => {
         formattedData.batchData.batchLeads[emp.name] = {};
         batches.forEach(batch => {
@@ -85,9 +82,9 @@ app.get('/api/sales', async (req, res) => {
             formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
         });
     });
-    // CORRECTED LOGIC: Use 'batches' array from the database
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
     
+    // UPDATED: Format monthly batch admin data with 15 elements
     employees.forEach(emp => {
       const adminData = monthlyBatchAdmin.find(m => m.employee_id === emp.id);
       if (adminData) {
@@ -95,10 +92,11 @@ app.get('/api/sales', async (req, res) => {
           adminData.lead_10_jul, adminData.lead_29_jul, adminData.lead_jul,
           adminData.lead_19_aug, adminData.lead_aug, adminData.lead_16_sep,
           adminData.lead_sep, adminData.lead_13_oct, adminData.lead_oct,
-          adminData.lead_nov, adminData.lead_dec, adminData.lead_jan
+          adminData.lead_nov, adminData.lead_dec, adminData.lead_jan,
+          adminData.lead_10_nov, adminData.lead_20_nov, adminData.lead_14_dec
         ];
       } else {
-        formattedData.monthlyBatchAdmin[emp.name] = Array(12).fill(0);
+        formattedData.monthlyBatchAdmin[emp.name] = Array(15).fill(0);
       }
     });
 
@@ -110,8 +108,7 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save all sales data
-// Save all sales data
+// Save all sales data (UPDATED to handle 15 elements)
 app.post('/api/sales', async (req, res) => {
   try {
     const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin } = req.body;
@@ -139,31 +136,26 @@ app.post('/api/sales', async (req, res) => {
     const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
     if (batchData) { const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] }); } } if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id'); }
 
-    // --- CORRECTED: Save Monthly Batch Admin Data ---
+    // --- UPDATED: Save Monthly Batch Admin Data with 15 elements ---
     if (monthlyBatchAdmin && monthlyBatchAdmin.length > 0) {
-      // First, delete all existing entries for all employees to prevent stale data
       await supabase.from('monthly_batch_admin_leads').delete().in('employee_id', Object.values(empIdMap));
       
       const adminDataToInsert = [];
       
-      // CORRECTED LOOP: Iterate over the array of objects from the frontend
       for (const employee of monthlyBatchAdmin) {
         const empName = employee.name;
         const empId = empIdMap[empName];
-        if (!empId) continue; // Skip if employee not found
-      
-  const leads = employee.leads;
-    adminDataToInsert.push({
-      employee_id: empId,
-      lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
-      lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
-      lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
-      lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
-      // --- YOUR REQUESTED LINES ADDED BELOW ---
-      lead_10_nov: leads[0] || 0, 
-      lead_20_nov: leads[0] || 0, 
-      lead_14_dec: leads[0] || 0
-    });
+        if (!empId) continue;
+        
+        const leads = employee.leads;
+        adminDataToInsert.push({
+          employee_id: empId,
+          lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
+          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
+          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
+          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
+          lead_10_nov: leads[12] || 0, lead_20_nov: leads[13] || 0, lead_14_dec: leads[14] || 0
+        });
       }
       
       if (adminDataToInsert.length > 0) {
@@ -188,9 +180,5 @@ app.post('/api/employee', async (req, res) => {
 });
 
 
-
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
-
-
-
