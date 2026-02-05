@@ -4,21 +4,13 @@
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
-const path = require('path');
 
 // --- App Initialization ---
 const app = express();
 const port = process.env.PORT || 3000;
 
 // --- Middleware ---
-const corsOptions = {
-  origin: [
-    'https://your-frontend-domain.onrender.com',
-    'http://localhost:3000',
-    'http://localhost:5173',
-  ],
-  optionsSuccessStatus: 200
-};
+
 app.use(cors(corsOptions));
 app.use(express.json());
 
@@ -219,6 +211,7 @@ app.post('/api/employee', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
 
 
 
