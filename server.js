@@ -79,7 +79,7 @@ app.get('/api/sales', async (req, res) => {
             formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
         });
     });
-    batchData.batches.forEach(b => formattedData.batchData.thc[b.id] = batch.thc || 0);
+   batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0)
     
     employees.forEach(emp => {
       const adminData = monthlyBatchAdmin.find(m => m.employee_id === emp.id);
@@ -211,6 +211,7 @@ app.post('/api/employee', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
 
 
 
