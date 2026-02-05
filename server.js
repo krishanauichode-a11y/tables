@@ -158,7 +158,8 @@ app.post('/api/sales', async (req, res) => {
           lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
           lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
           lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
-          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0
+          lead_10_nov: leads[0] || 0, lead_20_nov: leads[0] || 0, lead_nov: leads[9] || 0, 
+          lead_14_dec: leads[0] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
         });
       }
       
@@ -187,4 +188,5 @@ app.post('/api/employee', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
 
