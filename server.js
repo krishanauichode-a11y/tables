@@ -111,6 +111,7 @@ app.get('/api/sales', async (req, res) => {
 });
 
 // Save all sales data
+// Save all sales data
 app.post('/api/sales', async (req, res) => {
   try {
     const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin } = req.body;
@@ -138,15 +139,33 @@ app.post('/api/sales', async (req, res) => {
     const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
     if (batchData) { const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] }); } } if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id'); }
 
-    if (monthlyBatchAdmin) {
+    // --- CORRECTED: Save Monthly Batch Admin Data ---
+    if (monthlyBatchAdmin && monthlyBatchAdmin.length > 0) {
+      // First, delete all existing entries for all employees to prevent stale data
       await supabase.from('monthly_batch_admin_leads').delete().in('employee_id', Object.values(empIdMap));
+      
       const adminDataToInsert = [];
-      for (const empName in monthlyBatchAdmin) {
-        const empId = empIdMap[empName]; if (!empId) continue;
-        const leads = monthlyBatchAdmin[empName];
-        adminDataToInsert.push({ employee_id: empId, lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0, lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0, lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0, lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0 });
+      
+      // CORRECTED LOOP: Iterate over the array of objects from the frontend
+      for (const employee of monthlyBatchAdmin) {
+        const empName = employee.name;
+        const empId = empIdMap[empName];
+        if (!empId) continue; // Skip if employee not found
+        
+        const leads = employee.leads;
+        adminDataToInsert.push({
+          employee_id: empId,
+          lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
+          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
+          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
+          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0
+        });
       }
-      if (adminDataToInsert.length > 0) { const { error: insertError } = await supabase.from('monthly_batch_admin_leads').insert(adminDataToInsert); if (insertError) throw insertError; }
+      
+      if (adminDataToInsert.length > 0) {
+        const { error: insertError } = await supabase.from('monthly_batch_admin_leads').insert(adminDataToInsert);
+        if (insertError) throw insertError;
+      }
     }
     
     res.json({ success: true });
@@ -168,3 +187,4 @@ app.post('/api/employee', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
