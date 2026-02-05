@@ -11,7 +11,7 @@ const port = process.env.PORT || 3000;
 
 // --- Middleware ---
 
-app.use(cors(corsOptions));
+app.use(cors());
 app.use(express.json());
 
 // Initialize Supabase client
@@ -211,6 +211,7 @@ app.post('/api/employee', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
 
 
 
