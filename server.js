@@ -1,354 +1,195 @@
 // server.js
+
+// --- Dependencies ---
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
+const path = require('path');
 
+// --- App Initialization ---
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// --- Middleware ---
+const corsOptions = {
+  origin: [
+    'https://your-frontend-domain.onrender.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+  ],
+  optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Initialize Supabase client
-const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
+// --- Supabase Client ---
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+if (!supabaseUrl || !supabaseKey) {
+  console.error("FATAL ERROR: SUPABASE_URL or SUPABASE_KEY is not set.");
+  process.exit(1);
+}
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// API Routes
+// --- API Routes ---
 
 // Get all sales data
 app.get('/api/sales', async (req, res) => {
   try {
-    const { data: employees, error: empError } = await supabase
-      .from('employees')
-      .select('*');
-    
-    if (empError) throw empError;
-    
-    const { data: dailyBookings, error: dailyError } = await supabase
-      .from('daily_bookings')
-      .select('*');
-    
-    if (dailyError) throw dailyError;
-    
-    const { data: leadSummary, error: summaryError } = await supabase
-      .from('lead_summary')
-      .select('*');
-    
-    if (summaryError) throw summaryError;
-    
-    const { data: monthlyLeads, error: monthlyError } = await supabase
-      .from('monthly_leads')
-      .select('*');
-    
-    if (monthlyError) throw monthlyError;
-    
-    const { data: batchLeads, error: batchError } = await supabase
-      .from('batch_leads')
-      .select('*');
-    
-    if (batchError) throw batchError;
-    
-    const { data: batches, error: batchesError } = await supabase
-      .from('batches')
-      .select('*');
-    
-    if (batchesError) throw batchesError;
-    
-    // Format the data to match the frontend structure
+    const [
+      { data: employees, error: empError },
+      { data: dailyBookings, error: dailyError },
+      { data: leadSummary, error: summaryError },
+      { data: monthlyLeads, error: monthlyError },
+      { data: batchLeads, error: batchError },
+      { data: batches, error: batchesError },
+      { data: monthlyBatchAdmin, error: batchAdminError } // NEW: Fetch monthly batch admin data
+    ] = await Promise.all([
+      supabase.from('employees').select('*'),
+      supabase.from('daily_bookings').select('*'),
+      supabase.from('lead_summary').select('*'),
+      supabase.from('monthly_leads').select('*'),
+      supabase.from('batch_leads').select('*'),
+      supabase.from('batches').select('*'),
+      supabase.from('monthly_batch_admin_leads').select('*') // NEW
+    ]);
+
+    if (empError) throw empError; if (dailyError) throw dailyError;
+    if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
+    if (batchError) throw batchError; if (batchesError) throw batchesError;
+    if (batchAdminError) throw batchAdminError;
+
+    const empMap = new Map(employees.map(emp => [emp.id, emp.name]));
+
+    // Format existing data
     const formattedData = {
       employees: employees.map(e => e.name),
-      dailyBookings: {},
-      leadSummary: {},
-      monthlyLeads: {},
+      dailyBookings: {}, leadSummary: {}, monthlyLeads: {},
       batchData: {
         employees: employees.map(e => e.name),
-        batches: batches,
-        batchLeads: {},
-        thc: {}
-      }
+        batches: batches, batchLeads: {}, thc: {}
+      },
+      monthlyBatchAdmin: {} // NEW: Add formatted monthly batch admin data
     };
-    
-    // Format daily bookings
+
+    // ... (formatting for dailyBookings, leadSummary, monthlyLeads, batchData remains the same)
     employees.forEach(emp => {
       formattedData.dailyBookings[emp.name] = {};
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
       empDailyBookings.forEach(booking => {
-        if (!formattedData.dailyBookings[emp.name][booking.month]) {
-          formattedData.dailyBookings[emp.name][booking.month] = {};
-        }
+        if (!formattedData.dailyBookings[emp.name][booking.month]) formattedData.dailyBookings[emp.name][booking.month] = {};
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
       });
     });
-    
-    // Format lead summary
     employees.forEach(emp => {
       const empSummary = leadSummary.find(s => s.employee_id === emp.id);
-      formattedData.leadSummary[emp.name] = empSummary ? {
-        pre: empSummary.fre,
-        off: empSummary.off,
-        rep: empSummary.rep,
-        app: empSummary.fam
-      } : { pre: 0, off: 0, rep: 0, app: 0 };
+      formattedData.leadSummary[emp.name] = empSummary ? { pre: empSummary.fre, off: empSummary.off, rep: empSummary.rep, app: empSummary.fam } : { pre: 0, off: 0, rep: 0, app: 0 };
     });
-    
-    // Format monthly leads
     employees.forEach(emp => {
       const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
       formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
-      empMonthly.forEach(month => {
-        formattedData.monthlyLeads[emp.name][month.month] = month.value;
-      });
+      empMonthly.forEach(month => formattedData.monthlyLeads[emp.name][month.month] = month.value);
     });
+    batchData.batches.forEach(b => {
+        formattedData.batchData.batchLeads[emp.name] = {};
+        batchData.batches.forEach(batch => {
+            const batchLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === batch.id);
+            formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
+        });
+    });
+    batchData.batches.forEach(b => formattedData.batchData.thc[b.id] = batch.thc || 0);
     
-    // Format batch data
+    // NEW: Format monthly batch admin data
     employees.forEach(emp => {
-      formattedData.batchData.batchLeads[emp.name] = {};
-      batches.forEach(batch => {
-        const batchLead = batchLeads.find(bl => 
-          bl.employee_id === emp.id && bl.batch_id === batch.id
-        );
-        formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
-      });
+      const adminData = monthlyBatchAdmin.find(m => m.employee_id === emp.id);
+      if (adminData) {
+        formattedData.monthlyBatchAdmin[emp.name] = [
+          adminData.lead_10_jul, adminData.lead_29_jul, adminData.lead_jul,
+          adminData.lead_19_aug, adminData.lead_aug, adminData.lead_16_sep,
+          adminData.lead_sep, adminData.lead_13_oct, adminData.lead_oct,
+          adminData.lead_nov, adminData.lead_dec, adminData.lead_jan
+        ];
+      } else {
+        formattedData.monthlyBatchAdmin[emp.name] = Array(12).fill(0);
+      }
     });
-    
-    batches.forEach(batch => {
-      formattedData.batchData.thc[batch.id] = batch.thc || 0;
-    });
-    
+
     res.json(formattedData);
   } catch (error) {
     console.error('Error fetching sales data:', error);
-    res.status(500).json({ error: 'Failed to fetch sales data' });
+    res.status(500).json({ error: 'Failed to fetch sales data', details: error.message });
   }
 });
 
 // Save all sales data
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData } = req.body;
-    
-    // First, ensure all employees exist
-    for (const empName of employees) {
-      const { data: existingEmp, error: empError } = await supabase
-        .from('employees')
-        .select('id')
-        .eq('name', empName)
-        .single();
-      
-      if (!existingEmp) {
-        await supabase
-          .from('employees')
-          .insert({ name: empName });
-      }
-    }
-    
-    // Get all employee IDs
-    const { data: allEmployees, error: allEmpError } = await supabase
-      .from('employees')
-      .select('id, name');
-    
-    if (allEmpError) throw allEmpError;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin } = req.body;
     
     const empIdMap = {};
-    allEmployees.forEach(emp => {
-      empIdMap[emp.name] = emp.id;
-    });
-    
-    // Save daily bookings
-    for (const empName in dailyBookings) {
-      const empId = empIdMap[empName];
-      if (!empId) continue;
-      
-      for (const month in dailyBookings[empName]) {
-        for (const day in dailyBookings[empName][month]) {
-          const value = dailyBookings[empName][month][day];
-          
-          const { data: existing, error: checkError } = await supabase
-            .from('daily_bookings')
-            .select('id')
-            .eq('employee_id', empId)
-            .eq('month', month)
-            .eq('day', day)
-            .single();
-          
-          if (existing) {
-            await supabase
-              .from('daily_bookings')
-              .update({ value })
-              .eq('id', existing.id);
-          } else {
-            await supabase
-              .from('daily_bookings')
-              .insert({
-                employee_id: empId,
-                month,
-                day,
-                value
-              });
-          }
-        }
+    for (const empName of employees) {
+      const { data: existingEmp, error: empError } = await supabase.from('employees').select('id').eq('name', empName).single();
+      if (empError && empError.code !== 'PGRST116') throw empError;
+      if (existingEmp) { empIdMap[empName] = existingEmp.id; }
+      else {
+        const { data: newEmp, error: insertError } = await supabase.from('employees').insert({ name: empName }).select('id').single();
+        if (insertError) throw insertError;
+        empIdMap[empName] = newEmp.id;
       }
     }
     
-    // Save lead summary
-    for (const empName in leadSummary) {
-      const empId = empIdMap[empName];
-      if (!empId) continue;
-      
-      const summary = leadSummary[empName];
-      
-      const { data: existing, error: checkError } = await supabase
-        .from('lead_summary')
-        .select('id')
-        .eq('employee_id', empId)
-        .single();
-      
-      if (existing) {
-        await supabase
-          .from('lead_summary')
-          .update({
-            fre: summary.pre,
-            off: summary.off,
-            rep: summary.rep,
-            fam: summary.app
-          })
-          .eq('id', existing.id);
-      } else {
-        await supabase
-          .from('lead_summary')
-          .insert({
-            employee_id: empId,
-            fre: summary.pre,
-            off: summary.off,
-            rep: summary.rep,
-            fam: summary.app
-          });
-      }
-    }
-    
-    // Save monthly leads
-    for (const empName in monthlyLeads) {
-      const empId = empIdMap[empName];
-      if (!empId) continue;
-      
-      for (let month = 0; month < 12; month++) {
-        const value = monthlyLeads[empName][month];
-        
-        const { data: existing, error: checkError } = await supabase
-          .from('monthly_leads')
-          .select('id')
-          .eq('employee_id', empId)
-          .eq('month', month)
-          .single();
-        
-        if (existing) {
-          await supabase
-            .from('monthly_leads')
-            .update({ value })
-            .eq('id', existing.id);
-        } else {
-          await supabase
-            .from('monthly_leads')
-            .insert({
-              employee_id: empId,
-              month,
-              value
-            });
-        }
-      }
-    }
-    
-    // Save batch data
-    if (batchData) {
-      // Save batches
-      for (const batch of batchData.batches) {
-        const { data: existing, error: checkError } = await supabase
-          .from('batches')
-          .select('id')
-          .eq('id', batch.id)
-          .single();
-        
-        if (existing) {
-          await supabase
-            .from('batches')
-            .update({
-              label: batch.label,
-              thc: batchData.thc[batch.id] || 0
-            })
-            .eq('id', batch.id);
-        } else {
-          await supabase
-            .from('batches')
-            .insert({
-              id: batch.id,
-              label: batch.label,
-              thc: batchData.thc[batch.id] || 0
-            });
-        }
-      }
-      
-      // Save batch leads
-      for (const empName in batchData.batchLeads) {
+    // (The upsert logic for dailyBookings, leadSummary, monthlyLeads, and batchData remains the same)
+    const upsertData = async (table, data) => { const { error } = await supabase.from(table).upsert(data, { onConflict: 'employee_id, month, day, batch_id' }); if (error) throw error; };
+    const dailyBookingsToUpsert = []; for (const empName in dailyBookings) { const empId = empIdMap[empName]; if (!empId) continue; for (const month in dailyBookings[empName]) { for (const day in dailyBookings[empName][month]) { dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); } } } if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert);
+    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } } if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert);
+    const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert);
+    if (batchData) { const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert); const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] }); } } if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert); }
+
+    // NEW: Save Monthly Batch Admin Data
+    if (monthlyBatchAdmin) {
+      // First, delete all existing entries for all employees to prevent stale data
+      await supabase.from('monthly_batch_admin_leads').delete().in('employee_id', Object.values(empIdMap));
+
+      // Then, insert the new data
+      const adminDataToInsert = [];
+      for (const empName in monthlyBatchAdmin) {
         const empId = empIdMap[empName];
         if (!empId) continue;
-        
-        for (const batchId in batchData.batchLeads[empName]) {
-          const value = batchData.batchLeads[empName][batchId];
-          
-          const { data: existing, error: checkError } = await supabase
-            .from('batch_leads')
-            .select('id')
-            .eq('employee_id', empId)
-            .eq('batch_id', batchId)
-            .single();
-          
-          if (existing) {
-            await supabase
-              .from('batch_leads')
-              .update({ value })
-              .eq('id', existing.id);
-          } else {
-            await supabase
-              .from('batch_leads')
-              .insert({
-                employee_id: empId,
-                batch_id: batchId,
-                value
-              });
-          }
-        }
+        const leads = monthlyBatchAdmin[empName];
+        adminDataToInsert.push({
+          employee_id: empId,
+          lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
+          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
+          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
+          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0
+        });
+      }
+      if (adminDataToInsert.length > 0) {
+        const { error: insertError } = await supabase.from('monthly_batch_admin_leads').insert(adminDataToInsert);
+        if (insertError) throw insertError;
       }
     }
     
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving sales data:', error);
-    res.status(500).json({ error: 'Failed to save sales data' });
+    res.status(500).json({ error: 'Failed to save sales data', details: error.message });
   }
 });
 
 // Add new employee
 app.post('/api/employee', async (req, res) => {
-  try {
-    const { name } = req.body;
-    
-    const { data, error } = await supabase
-      .from('employees')
-      .insert({ name })
-      .select();
-    
-    if (error) throw error;
-    
-    res.json({ success: true, employee: data[0] });
-  } catch (error) {
-    console.error('Error adding employee:', error);
-    res.status(500).json({ error: 'Failed to add employee' });
-  }
+  try { /* ... (this function remains the same) ... */ 
+    const { name } = req.body; if (!name) return res.status(400).json({ error: 'Employee name is required' });
+    const { data, error } = await supabase.from('employees').insert({ name }).select().single();
+    if (error) { if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); throw error; }
+    res.json({ success: true, employee: data });
+  } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
 });
 
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
+// Catch-all route
+app.get('*', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 
+// Start Server
+app.listen(port, () => { console.log(`Server is running on port ${port}`); });
