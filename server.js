@@ -11,11 +11,11 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // --- Middleware ---
-
 app.use(cors());
 app.use(express.json());
 
 // Initialize Supabase client
+// WARNING: Move these to environment variables for production!
 const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -157,7 +157,7 @@ app.post('/api/sales', async (req, res) => {
     for (const empName in dailyBookings) { const empId = empIdMap[empName]; if (!empId) continue; for (const month in dailyBookings[empName]) { for (const day in dailyBookings[empName][month]) { dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); } } } if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
     const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
     const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
-    if (batchData) { const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] }); } } if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id'); }
+    if (batchData) { const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[emp.name][batchId] }); } } if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id'); }
 
     // --- START: Save custom headers ---
     if (customHeaders) {
@@ -272,6 +272,65 @@ app.post('/api/employee', async (req, res) => {
     res.json({ success: true, employee: data });
   } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
 });
+
+// ===============================================================
+// NEW: API Routes for Webinar Leads (6th Carousel)
+// ===============================================================
+
+// GET all webinar leads
+app.get('/api/webinar-leads', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('webinar_leads')
+      .select('month, lead_count');
+
+    if (error) {
+      throw error;
+    }
+
+    // Format data into a simple key-value object for the frontend
+    const formattedData = {};
+    data.forEach(item => {
+      formattedData[item.month] = item.lead_count;
+    });
+
+    res.json(formattedData);
+  } catch (error) {
+    console.error('Error fetching webinar leads:', error);
+    res.status(500).json({ error: 'Failed to fetch webinar leads', details: error.message });
+  }
+});
+
+// POST (Create or Update) webinar leads
+app.post('/api/webinar-leads', async (req, res) => {
+  try {
+    const { month, count } = req.body;
+
+    if (!month || count === undefined || count === null) {
+      return res.status(400).json({ error: 'Month and count are required.' });
+    }
+
+    // Use 'upsert' to either create a new entry or update the existing one for that month
+    const { data, error } = await supabase
+      .from('webinar_leads')
+      .upsert(
+        { month: month, lead_count: count },
+        { onConflict: 'month' } // If a row with the same 'month' exists, update it.
+      )
+      .select()
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({ success: true, data: data });
+  } catch (error) {
+    console.error('Error saving webinar leads:', error);
+    res.status(500).json({ error: 'Failed to save webinar leads', details: error.message });
+  }
+});
+
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
