@@ -22,7 +22,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- API Routes ---
 
-// Get all sales data (UPDATED to handle 15 elements)
+// Get all sales data (UPDATED to handle 15 elements and custom headers)
 app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
@@ -33,7 +33,8 @@ app.get('/api/sales', async (req, res) => {
       { data: monthlyLeads, error: monthlyError },
       { data: batchLeads, error: batchError },
       { data: batches, error: batchesError },
-      { data: monthlyBatchAdmin, error: batchAdminError }
+      { data: monthlyBatchAdmin, error: batchAdminError },
+      { data: customHeaders, error: headersError }
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -41,13 +42,15 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('monthly_leads').select('*'),
       supabase.from('batch_leads').select('*'),
       supabase.from('batches').select('*'),
-      supabase.from('monthly_batch_admin_leads').select('*')
+      supabase.from('monthly_batch_admin_leads').select('*'),
+      supabase.from('custom_headers').select('*')
     ]);
 
     if (empError) throw empError; if (dailyError) throw dailyError;
     if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
     if (batchError) throw batchError; if (batchesError) throw batchesError;
     if (batchAdminError) throw batchAdminError;
+    if (headersError) throw headersError;
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
@@ -55,8 +58,24 @@ app.get('/api/sales', async (req, res) => {
       employees: employees.map(e => e.name),
       dailyBookings: {}, leadSummary: {}, monthlyLeads: {},
       batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
-      monthlyBatchAdmin: {}
+      monthlyBatchAdmin: {},
+      customHeaders: {
+        daily: [],
+        summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"],
+        monthly: ["Team Member"],
+        batch: ["Team Member"],
+        batchTable: ["Team Member"]
+      }
     };
+
+    // Process custom headers
+    if (customHeaders && customHeaders.length > 0) {
+      customHeaders.forEach(header => {
+        if (header.table_name && header.headers) {
+          formattedData.customHeaders[header.table_name] = header.headers;
+        }
+      });
+    }
 
     employees.forEach(emp => {
       formattedData.dailyBookings[emp.name] = {};
@@ -108,11 +127,10 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save all sales data (UPDATED to handle 15 elements)
-// Save all sales data (SUPER-DEBUG VERSION)
+// Save all sales data (UPDATED to handle 15 elements and custom headers)
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin } = req.body;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
     console.log(">>> [SAVE-DEBUG] monthlyBatchAdmin received:", monthlyBatchAdmin);
@@ -141,6 +159,44 @@ app.post('/api/sales', async (req, res) => {
     const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
     if (batchData) { const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] }); } } if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id'); }
 
+    // --- START: Save custom headers ---
+    if (customHeaders) {
+      console.log(">>> [SAVE-DEBUG] Processing custom headers...");
+      
+      // Delete existing headers
+      const { error: deleteHeadersError } = await supabase
+        .from('custom_headers')
+        .delete()
+        .neq('id', 0); // Delete all records
+      
+      if (deleteHeadersError) {
+        console.error("!!! [SAVE-DEBUG] ERROR DURING HEADERS DELETE:", deleteHeadersError);
+        throw deleteHeadersError;
+      }
+      
+      // Insert new headers
+      const headersToInsert = [];
+      for (const tableName in customHeaders) {
+        headersToInsert.push({
+          table_name: tableName,
+          headers: customHeaders[tableName]
+        });
+      }
+      
+      if (headersToInsert.length > 0) {
+        const { error: insertHeadersError } = await supabase
+          .from('custom_headers')
+          .insert(headersToInsert);
+        
+        if (insertHeadersError) {
+          console.error("!!! [SAVE-DEBUG] ERROR DURING HEADERS INSERT:", insertHeadersError);
+          throw insertHeadersError;
+        }
+        console.log(">>> [SAVE-DEBUG] Custom headers saved successfully.");
+      }
+    }
+    // --- END: Save custom headers ---
+
     // --- START: Super-Debug for Monthly Batch Admin ---
     if (monthlyBatchAdmin && monthlyBatchAdmin.length > 0) {
       console.log(">>> [SAVE-DEBUG] Processing monthlyBatchAdmin...");
@@ -160,15 +216,14 @@ app.post('/api/sales', async (req, res) => {
 
       const adminDataToInsert = [];
       
-      for (const employee of monthlyBatchAdmin) {
-        const empName = employee.name;
+      for (const empName in monthlyBatchAdmin) {
         const empId = empIdMap[empName];
         if (!empId) {
           console.log(`>>> [SAVE-DEBUG] Skipping employee ${empName}, ID not found.`);
           continue;
         }
         
-        const leads = employee.leads;
+        const leads = monthlyBatchAdmin[empName];
         const insertObject = {
           employee_id: empId,
           lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
@@ -206,6 +261,7 @@ app.post('/api/sales', async (req, res) => {
     res.status(500).json({ error: 'Failed to save sales data', details: error.message });
   }
 });
+
 // Add new employee
 app.post('/api/employee', async (req, res) => {
   try {
@@ -217,7 +273,5 @@ app.post('/api/employee', async (req, res) => {
   } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
 });
 
-
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
-
