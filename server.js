@@ -386,9 +386,9 @@ app.post('/api/webinar-data/:year', async (req, res) => {
     console.log(`>>> [DEBUG] Saving webinar data for year: ${year}`);
     
     // Convert the monthly data to an array of records
-    const recordsToUpsert = [];
+    const recordsToInsert = [];
     for (const month in monthlyData) {
-      recordsToUpsert.push({
+      recordsToInsert.push({
         year: parseInt(year),
         month: month,
         lead_count: monthlyData[month]
@@ -406,15 +406,22 @@ app.post('/api/webinar-data/:year', async (req, res) => {
       // Continue even if delete fails (might be because no records exist)
     }
     
-    // Insert new records
-    if (recordsToUpsert.length > 0) {
-      const { error: insertError } = await supabase
-        .from('yearly_webinar_leads')
-        .insert(recordsToUpsert);
-      
-      if (insertError) {
-        console.error(`Error inserting webinar data for year ${year}:`, insertError);
-        throw insertError;
+    // Insert new records one by one to avoid the ID constraint issue
+    if (recordsToInsert.length > 0) {
+      for (const record of recordsToInsert) {
+        // Only include the fields that exist in the table, excluding the id field
+        const { error: insertError } = await supabase
+          .from('yearly_webinar_leads')
+          .insert({
+            year: record.year,
+            month: record.month,
+            lead_count: record.lead_count
+          });
+        
+        if (insertError) {
+          console.error(`Error inserting webinar data for year ${year}, month ${record.month}:`, insertError);
+          throw insertError;
+        }
       }
     }
     
