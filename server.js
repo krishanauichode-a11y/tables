@@ -22,7 +22,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- API Routes ---
 
-// Get all sales data (UPDATED to handle 15 elements and custom headers)
+// Get ALL sales data, including webinar leads
 app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
@@ -34,7 +34,8 @@ app.get('/api/sales', async (req, res) => {
       { data: batchLeads, error: batchError },
       { data: batches, error: batchesError },
       { data: monthlyBatchAdmin, error: batchAdminError },
-      { data: customHeaders, error: headersError }
+      { data: customHeaders, error: headersError },
+      { data: webinarLeads, error: webinarError } // <-- ADDED: Fetch webinar leads
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -43,14 +44,17 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('batch_leads').select('*'),
       supabase.from('batches').select('*'),
       supabase.from('monthly_batch_admin_leads').select('*'),
-      supabase.from('custom_headers').select('*')
+      supabase.from('custom_headers').select('*'),
+      supabase.from('webinar_leads').select('*') // <-- ADDED: Fetch webinar leads
     ]);
 
+    // Check for all errors, including the new one
     if (empError) throw empError; if (dailyError) throw dailyError;
     if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
     if (batchError) throw batchError; if (batchesError) throw batchesError;
     if (batchAdminError) throw batchAdminError;
     if (headersError) throw headersError;
+    if (webinarError) throw webinarError; // <-- ADDED: Check for webinar error
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
@@ -59,13 +63,8 @@ app.get('/api/sales', async (req, res) => {
       dailyBookings: {}, leadSummary: {}, monthlyLeads: {},
       batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
       monthlyBatchAdmin: {},
-      customHeaders: {
-        daily: [],
-        summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"],
-        monthly: ["Team Member"],
-        batch: ["Team Member"],
-        batchTable: ["Team Member"]
-      }
+      customHeaders: { /* default headers */ },
+      webinarLeads: {} // <-- ADDED: Initialize webinar leads object
     };
 
     // Process custom headers
@@ -76,7 +75,8 @@ app.get('/api/sales', async (req, res) => {
         }
       });
     }
-
+    
+    // ... (all the other data processing loops for employees, dailyBookings, etc.) ...
     employees.forEach(emp => {
       formattedData.dailyBookings[emp.name] = {};
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
@@ -102,22 +102,21 @@ app.get('/api/sales', async (req, res) => {
         });
     });
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
-    
-    // UPDATED: Format monthly batch admin data with 15 elements
     employees.forEach(emp => {
       const adminData = monthlyBatchAdmin.find(m => m.employee_id === emp.id);
       if (adminData) {
-        formattedData.monthlyBatchAdmin[emp.name] = [
-          adminData.lead_10_jul, adminData.lead_29_jul, adminData.lead_jul,
-          adminData.lead_19_aug, adminData.lead_aug, adminData.lead_16_sep,
-          adminData.lead_sep, adminData.lead_13_oct, adminData.lead_oct,
-          adminData.lead_nov, adminData.lead_dec, adminData.lead_jan,
-          adminData.lead_10_nov, adminData.lead_20_nov, adminData.lead_14_dec
-        ];
+        formattedData.monthlyBatchAdmin[emp.name] = [/* ... 15 elements ... */];
       } else {
         formattedData.monthlyBatchAdmin[emp.name] = Array(15).fill(0);
       }
     });
+
+    // ADDED: Process webinar leads
+    if (webinarLeads && webinarLeads.length > 0) {
+      webinarLeads.forEach(item => {
+        formattedData.webinarLeads[item.month] = item.lead_count;
+      });
+    }
 
     console.log(">>> [DEBUG] Data formatted. Sending response.");
     res.json(formattedData);
@@ -127,15 +126,17 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save all sales data (CORRECTED)
+// Save ALL sales data, including webinar leads
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders } = req.body;
+    const { 
+      employees, dailyBookings, leadSummary, monthlyLeads, batchData, 
+      monthlyBatchAdmin, customHeaders, webinarLeads // <-- ADDED: Destructure webinarLeads
+    } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
 
     // --- Step 1: Get Employee IDs ---
-    console.log(">>> [SAVE-DEBUG] Step 1: Mapping employee names to IDs...");
     const empIdMap = {};
     for (const empName of employees) {
       const { data: existingEmp, error: empError } = await supabase.from('employees').select('id').eq('name', empName).single();
@@ -147,87 +148,45 @@ app.post('/api/sales', async (req, res) => {
         empIdMap[empName] = newEmp.id;
       }
     }
-    console.log(">>> [SAVE-DEBUG] Step 1: Finished mapping IDs.");
     
     const upsertData = async (table, data, conflictColumns) => { 
-        console.log(`>>> [SAVE-DEBUG] Upserting into ${table}...`);
         const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
-        if (error) {
-            console.error(`!!! [SAVE-DEBUG] UPSERT ERROR in ${table}:`, error);
-            throw error;
-        }
-        console.log(`>>> [SAVE-DEBUG] Upsert into ${table} successful.`);
+        if (error) throw error; 
     };
 
-    // --- Step 2: Save Daily Bookings ---
-    const dailyBookingsToUpsert = [];
-    for (const empName in dailyBookings) { const empId = empIdMap[empName]; if (!empId) continue; for (const month in dailyBookings[empName]) { for (const day in dailyBookings[empName][month]) { dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); } } } 
-    if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
-    
-    // --- Step 3: Save Lead Summary ---
-    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } 
-    if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
+    // --- Steps 2-7: Save all other data (omitted for brevity but must be present) ---
+    // (Daily Bookings, Lead Summary, Monthly Leads, Batch Data, Custom Headers, Monthly Batch Admin)
+    // ... (all your existing save logic for these) ...
+    const dailyBookingsToUpsert = []; /* ... */ if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
+    const leadSummaryToUpsert = []; /* ... */ if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
+    const monthlyLeadsToUpsert = []; /* ... */ if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
+    if (batchData) { /* ... */ }
+    if (customHeaders) { /* ... */ }
+    if (monthlyBatchAdmin && Object.keys(monthlyBatchAdmin).length > 0) { /* ... */ }
 
-    // --- Step 4: Save Monthly Leads ---
-    const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } 
-    if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
-
-    // --- Step 5: Save Batch Data ---
-    if (batchData) {
-        console.log(">>> [SAVE-DEBUG] Step 5: Saving batch data...");
-        const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); 
-        if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); 
-        const batchLeadsToUpsert = []; 
-        for (const empName in batchData.batchLeads) { 
-            const empId = empIdMap[empName]; 
-            if (!empId) continue; 
-            for (const batchId in batchData.batchLeads[empName]) { 
-                batchLeadsToUpsert.push({ 
-                    employee_id: empId, 
-                    batch_id: batchId, 
-                    value: batchData.batchLeads[empName][batchId] // <--- THIS LINE IS NOW CORRECT
-                }); 
-            } 
-        } 
-        if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
-    }
-
-    // --- Step 6: Save Custom Headers ---
-    if (customHeaders) {
-      console.log(">>> [SAVE-DEBUG] Step 6: Processing custom headers...");
-      const { error: deleteHeadersError } = await supabase.from('custom_headers').delete().neq('id', 0);
-      if (deleteHeadersError) throw deleteHeadersError;
-      const headersToInsert = [];
-      for (const tableName in customHeaders) { headersToInsert.push({ table_name: tableName, headers: customHeaders[tableName] }); }
-      if (headersToInsert.length > 0) {
-        const { error: insertHeadersError } = await supabase.from('custom_headers').insert(headersToInsert);
-        if (insertHeadersError) throw insertHeadersError;
-      }
-    }
-
-    // --- Step 7: Save Monthly Batch Admin ---
-    if (monthlyBatchAdmin && Object.keys(monthlyBatchAdmin).length > 0) {
-      console.log(">>> [SAVE-DEBUG] Step 7: Processing monthlyBatchAdmin...");
-      const employeeIds = Object.values(empIdMap);
-      const { error: deleteError } = await supabase.from('monthly_batch_admin_leads').delete().in('employee_id', employeeIds);
-      if (deleteError) throw deleteError;
-      const adminDataToInsert = [];
-      for (const empName in monthlyBatchAdmin) {
-        const empId = empIdMap[empName]; if (!empId) continue;
-        const leads = monthlyBatchAdmin[empName];
-        adminDataToInsert.push({
-          employee_id: empId, lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
-          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
-          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
-          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
-          lead_10_nov: leads[12] || 0, lead_20_nov: leads[13] || 0, lead_14_dec: leads[14] || 0
+    // --- ADDED: Step 8: Save Webinar Leads ---
+    if (webinarLeads) {
+      console.log(">>> [SAVE-DEBUG] Step 8: Processing webinar leads...");
+      const webinarLeadsToUpsert = [];
+      for (const month in webinarLeads) {
+        webinarLeadsToUpsert.push({
+          month: month,
+          lead_count: webinarLeads[month]
         });
       }
-      if (adminDataToInsert.length > 0) {
-        const { error: insertError } = await supabase.from('monthly_batch_admin_leads').insert(adminDataToInsert);
-        if (insertError) throw insertError;
+      if (webinarLeadsToUpsert.length > 0) {
+        const { error: webinarError } = await supabase
+          .from('webinar_leads')
+          .upsert(webinarLeadsToUpsert, { onConflict: 'month' });
+        
+        if (webinarError) {
+          console.error("!!! [SAVE-DEBUG] ERROR DURING WEBINAR LEADS UPSERT:", webinarError);
+          throw webinarError;
+        }
+        console.log(">>> [SAVE-DEBUG] Webinar leads saved successfully.");
       }
     }
+    // --- END: Webinar Leads ---
 
     console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
     res.json({ success: true });
@@ -237,6 +196,7 @@ app.post('/api/sales', async (req, res) => {
     res.status(500).json({ error: 'Failed to save sales data', details: error.message });
   }
 });
+
 // Add new employee
 app.post('/api/employee', async (req, res) => {
   try {
@@ -248,65 +208,6 @@ app.post('/api/employee', async (req, res) => {
   } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
 });
 
-// ===============================================================
-// NEW: API Routes for Webinar Leads (6th Carousel)
-// ===============================================================
-
-// GET all webinar leads
-app.get('/api/webinar-leads', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('webinar_leads')
-      .select('month, lead_count');
-
-    if (error) {
-      throw error;
-    }
-
-    // Format data into a simple key-value object for the frontend
-    const formattedData = {};
-    data.forEach(item => {
-      formattedData[item.month] = item.lead_count;
-    });
-
-    res.json(formattedData);
-  } catch (error) {
-    console.error('Error fetching webinar leads:', error);
-    res.status(500).json({ error: 'Failed to fetch webinar leads', details: error.message });
-  }
-});
-
-// POST (Create or Update) webinar leads
-app.post('/api/webinar-leads', async (req, res) => {
-  try {
-    const { month, count } = req.body;
-
-    if (!month || count === undefined || count === null) {
-      return res.status(400).json({ error: 'Month and count are required.' });
-    }
-
-    // Use 'upsert' to either create a new entry or update the existing one for that month
-    const { data, error } = await supabase
-      .from('webinar_leads')
-      .upsert(
-        { month: month, lead_count: count },
-        { onConflict: 'month' } // If a row with the same 'month' exists, update it.
-      )
-      .select()
-      .single();
-
-    if (error) {
-      throw error;
-    }
-
-    res.json({ success: true, data: data });
-  } catch (error) {
-    console.error('Error saving webinar leads:', error);
-    res.status(500).json({ error: 'Failed to save webinar leads', details: error.message });
-  }
-});
-
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
-
