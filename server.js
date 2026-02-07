@@ -127,14 +127,15 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save all sales data (UPDATED to handle 15 elements and custom headers)
+// Save all sales data (CORRECTED)
 app.post('/api/sales', async (req, res) => {
   try {
     const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
-    console.log(">>> [SAVE-DEBUG] monthlyBatchAdmin received:", monthlyBatchAdmin);
 
+    // --- Step 1: Get Employee IDs ---
+    console.log(">>> [SAVE-DEBUG] Step 1: Mapping employee names to IDs...");
     const empIdMap = {};
     for (const empName of employees) {
       const { data: existingEmp, error: empError } = await supabase.from('employees').select('id').eq('name', empName).single();
@@ -146,122 +147,96 @@ app.post('/api/sales', async (req, res) => {
         empIdMap[empName] = newEmp.id;
       }
     }
+    console.log(">>> [SAVE-DEBUG] Step 1: Finished mapping IDs.");
     
     const upsertData = async (table, data, conflictColumns) => { 
+        console.log(`>>> [SAVE-DEBUG] Upserting into ${table}...`);
         const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
-        if (error) throw error; 
+        if (error) {
+            console.error(`!!! [SAVE-DEBUG] UPSERT ERROR in ${table}:`, error);
+            throw error;
+        }
+        console.log(`>>> [SAVE-DEBUG] Upsert into ${table} successful.`);
     };
 
-    // (Other save operations are omitted for brevity, but they should still be here)
+    // --- Step 2: Save Daily Bookings ---
     const dailyBookingsToUpsert = [];
-    for (const empName in dailyBookings) { const empId = empIdMap[empName]; if (!empId) continue; for (const month in dailyBookings[empName]) { for (const day in dailyBookings[empName][month]) { dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); } } } if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
-    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
-    const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
-    if (batchData) { const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[emp.name][batchId] }); } } if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id'); }
+    for (const empName in dailyBookings) { const empId = empIdMap[empName]; if (!empId) continue; for (const month in dailyBookings[empName]) { for (const day in dailyBookings[empName][month]) { dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); } } } 
+    if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
+    
+    // --- Step 3: Save Lead Summary ---
+    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } 
+    if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
 
-    // --- START: Save custom headers ---
+    // --- Step 4: Save Monthly Leads ---
+    const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } 
+    if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
+
+    // --- Step 5: Save Batch Data ---
+    if (batchData) {
+        console.log(">>> [SAVE-DEBUG] Step 5: Saving batch data...");
+        const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); 
+        if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); 
+        const batchLeadsToUpsert = []; 
+        for (const empName in batchData.batchLeads) { 
+            const empId = empIdMap[empName]; 
+            if (!empId) continue; 
+            for (const batchId in batchData.batchLeads[empName]) { 
+                batchLeadsToUpsert.push({ 
+                    employee_id: empId, 
+                    batch_id: batchId, 
+                    value: batchData.batchLeads[empName][batchId] // <--- THIS LINE IS NOW CORRECT
+                }); 
+            } 
+        } 
+        if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
+    }
+
+    // --- Step 6: Save Custom Headers ---
     if (customHeaders) {
-      console.log(">>> [SAVE-DEBUG] Processing custom headers...");
-      
-      // Delete existing headers
-      const { error: deleteHeadersError } = await supabase
-        .from('custom_headers')
-        .delete()
-        .neq('id', 0); // Delete all records
-      
-      if (deleteHeadersError) {
-        console.error("!!! [SAVE-DEBUG] ERROR DURING HEADERS DELETE:", deleteHeadersError);
-        throw deleteHeadersError;
-      }
-      
-      // Insert new headers
+      console.log(">>> [SAVE-DEBUG] Step 6: Processing custom headers...");
+      const { error: deleteHeadersError } = await supabase.from('custom_headers').delete().neq('id', 0);
+      if (deleteHeadersError) throw deleteHeadersError;
       const headersToInsert = [];
-      for (const tableName in customHeaders) {
-        headersToInsert.push({
-          table_name: tableName,
-          headers: customHeaders[tableName]
-        });
-      }
-      
+      for (const tableName in customHeaders) { headersToInsert.push({ table_name: tableName, headers: customHeaders[tableName] }); }
       if (headersToInsert.length > 0) {
-        const { error: insertHeadersError } = await supabase
-          .from('custom_headers')
-          .insert(headersToInsert);
-        
-        if (insertHeadersError) {
-          console.error("!!! [SAVE-DEBUG] ERROR DURING HEADERS INSERT:", insertHeadersError);
-          throw insertHeadersError;
-        }
-        console.log(">>> [SAVE-DEBUG] Custom headers saved successfully.");
+        const { error: insertHeadersError } = await supabase.from('custom_headers').insert(headersToInsert);
+        if (insertHeadersError) throw insertHeadersError;
       }
     }
-    // --- END: Save custom headers ---
 
-    // --- START: Super-Debug for Monthly Batch Admin ---
-    if (monthlyBatchAdmin && monthlyBatchAdmin.length > 0) {
-      console.log(">>> [SAVE-DEBUG] Processing monthlyBatchAdmin...");
+    // --- Step 7: Save Monthly Batch Admin ---
+    if (monthlyBatchAdmin && Object.keys(monthlyBatchAdmin).length > 0) {
+      console.log(">>> [SAVE-DEBUG] Step 7: Processing monthlyBatchAdmin...");
       const employeeIds = Object.values(empIdMap);
-      console.log(">>> [SAVE-DEBUG] Deleting old entries for IDs:", employeeIds);
-
-      const { error: deleteError } = await supabase
-        .from('monthly_batch_admin_leads')
-        .delete()
-        .in('employee_id', employeeIds);
-      
-      if (deleteError) {
-        console.error("!!! [SAVE-DEBUG] ERROR DURING DELETE:", deleteError);
-        throw deleteError;
-      }
-      console.log(">>> [SAVE-DEBUG] Delete successful.");
-
+      const { error: deleteError } = await supabase.from('monthly_batch_admin_leads').delete().in('employee_id', employeeIds);
+      if (deleteError) throw deleteError;
       const adminDataToInsert = [];
-      
       for (const empName in monthlyBatchAdmin) {
-        const empId = empIdMap[empName];
-        if (!empId) {
-          console.log(`>>> [SAVE-DEBUG] Skipping employee ${empName}, ID not found.`);
-          continue;
-        }
-        
+        const empId = empIdMap[empName]; if (!empId) continue;
         const leads = monthlyBatchAdmin[empName];
-        const insertObject = {
-          employee_id: empId,
-          lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
+        adminDataToInsert.push({
+          employee_id: empId, lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
           lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
           lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
           lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
           lead_10_nov: leads[12] || 0, lead_20_nov: leads[13] || 0, lead_14_dec: leads[14] || 0
-        };
-        console.log(`>>> [SAVE-DEBUG] Preparing to insert for ${empName}:`, insertObject);
-        adminDataToInsert.push(insertObject);
+        });
       }
-      
       if (adminDataToInsert.length > 0) {
-        console.log(">>> [SAVE-DEBUG] Inserting new data...");
-        const { error: insertError, data } = await supabase
-          .from('monthly_batch_admin_leads')
-          .insert(adminDataToInsert);
-        
-        if (insertError) {
-          console.error("!!! [SAVE-DEBUG] ERROR DURING INSERT:", insertError);
-          throw insertError;
-        }
-        console.log(">>> [SAVE-DEBUG] Insert successful. Data:", data);
-      } else {
-        console.log(">>> [SAVE-DEBUG] No new data to insert.");
+        const { error: insertError } = await supabase.from('monthly_batch_admin_leads').insert(adminDataToInsert);
+        if (insertError) throw insertError;
       }
-    } else {
-      console.log(">>> [SAVE-DEBUG] monthlyBatchAdmin is empty or not provided.");
     }
-    // --- END: Super-Debug ---
 
+    console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
     res.json({ success: true });
+
   } catch (error) {
     console.error('!!! [SAVE-DEBUG] CATASTROPHIC ERROR IN SAVE ROUTE !!!', error);
     res.status(500).json({ error: 'Failed to save sales data', details: error.message });
   }
 });
-
 // Add new employee
 app.post('/api/employee', async (req, res) => {
   try {
@@ -334,3 +309,4 @@ app.post('/api/webinar-leads', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+
