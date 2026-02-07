@@ -162,7 +162,7 @@ app.post('/api/sales', async (req, res) => {
     if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
     
     // --- Save Lead Summary ---
-    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } 
+    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } } 
     if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
 
     // --- Save Monthly Leads ---
@@ -243,6 +243,88 @@ app.post('/api/employee', async (req, res) => {
     if (error) { if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); throw error; }
     res.json({ success: true, employee: data });
   } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
+});
+
+// Get webinar data for a specific year
+app.get('/api/webinar-data/:year', async (req, res) => {
+  try {
+    const { year } = req.params;
+    console.log(`>>> [DEBUG] Fetching webinar data for year: ${year}`);
+    
+    const { data, error } = await supabase
+      .from('yearly_webinar_leads')
+      .select('*')
+      .eq('year', parseInt(year));
+    
+    if (error) {
+      console.error(`Error fetching webinar data for year ${year}:`, error);
+      // If the table doesn't exist or no data found, return empty object
+      return res.json({});
+    }
+    
+    // Convert array to month-keyed object
+    const monthlyData = {};
+    if (data && data.length > 0) {
+      data.forEach(item => {
+        monthlyData[item.month] = item.lead_count;
+      });
+    }
+    
+    console.log(`>>> [DEBUG] Returning webinar data for year ${year}:`, monthlyData);
+    res.json(monthlyData);
+  } catch (error) {
+    console.error(`Error in GET /api/webinar-data/${req.params.year}:`, error);
+    res.status(500).json({ error: 'Failed to fetch webinar data', details: error.message });
+  }
+});
+
+// Save webinar data for a specific year
+app.post('/api/webinar-data/:year', async (req, res) => {
+  try {
+    const { year } = req.params;
+    const monthlyData = req.body;
+    
+    console.log(`>>> [DEBUG] Saving webinar data for year: ${year}`);
+    
+    // Convert the monthly data to an array of records
+    const recordsToUpsert = [];
+    for (const month in monthlyData) {
+      recordsToUpsert.push({
+        year: parseInt(year),
+        month: month,
+        lead_count: monthlyData[month]
+      });
+    }
+    
+    // Delete existing records for this year
+    const { error: deleteError } = await supabase
+      .from('yearly_webinar_leads')
+      .delete()
+      .eq('year', parseInt(year));
+    
+    if (deleteError) {
+      console.error(`Error deleting existing webinar data for year ${year}:`, deleteError);
+      // Continue even if delete fails (might be because no records exist)
+    }
+    
+    // Insert new records
+    if (recordsToUpsert.length > 0) {
+      const { error: insertError } = await supabase
+        .from('yearly_webinar_leads')
+        .insert(recordsToUpsert);
+      
+      if (insertError) {
+        console.error(`Error inserting webinar data for year ${year}:`, insertError);
+        throw insertError;
+      }
+    }
+    
+    console.log(`>>> [DEBUG] Successfully saved webinar data for year: ${year}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error(`Error in POST /api/webinar-data/${req.params.year}:`, error);
+    res.status(500).json({ error: 'Failed to save webinar data', details: error.message });
+  }
 });
 
 // Start Server
