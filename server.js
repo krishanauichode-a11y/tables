@@ -49,12 +49,9 @@ app.get('/api/sales', async (req, res) => {
     ]);
 
     // Check for all errors
-    if (empError) throw empError;
-    if (dailyError) throw dailyError;
-    if (summaryError) throw summaryError;
-    if (monthlyError) throw monthlyError;
-    if (batchError) throw batchError;
-    if (batchesError) throw batchesError;
+    if (empError) throw empError; if (dailyError) throw dailyError;
+    if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
+    if (batchError) throw batchError; if (batchesError) throw batchesError;
     if (batchAdminError) throw batchAdminError;
     if (headersError) throw headersError;
     if (webinarError) throw webinarError;
@@ -85,34 +82,27 @@ app.get('/api/sales', async (req, res) => {
       formattedData.dailyBookings[emp.name] = {};
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
       empDailyBookings.forEach(booking => {
-        if (!formattedData.dailyBookings[emp.name][booking.month]) {
-          formattedData.dailyBookings[emp.name][booking.month] = {};
-        }
+        if (!formattedData.dailyBookings[emp.name][booking.month]) formattedData.dailyBookings[emp.name][booking.month] = {};
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
       });
     });
-
     employees.forEach(emp => {
       const empSummary = leadSummary.find(s => s.employee_id === emp.id);
       formattedData.leadSummary[emp.name] = empSummary ? { pre: empSummary.fre, off: empSummary.off, rep: empSummary.rep, app: empSummary.fam } : { pre: 0, off: 0, rep: 0, app: 0 };
     });
-
     employees.forEach(emp => {
       const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
       formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
       empMonthly.forEach(month => formattedData.monthlyLeads[emp.name][month.month] = month.value);
     });
-
     employees.forEach(emp => {
-      formattedData.batchData.batchLeads[emp.name] = {};
-      batches.forEach(batch => {
-        const batchLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === batch.id);
-        formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
-      });
+        formattedData.batchData.batchLeads[emp.name] = {};
+        batches.forEach(batch => {
+            const batchLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === batch.id);
+            formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
+        });
     });
-
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
-
     employees.forEach(emp => {
       const adminData = monthlyBatchAdmin.find(m => m.employee_id === emp.id);
       if (adminData) {
@@ -127,7 +117,6 @@ app.get('/api/sales', async (req, res) => {
         formattedData.monthlyBatchAdmin[emp.name] = Array(15).fill(0);
       }
     });
-
     // Process webinar leads
     if (webinarLeads && webinarLeads.length > 0) {
       webinarLeads.forEach(item => {
@@ -154,9 +143,8 @@ app.post('/api/sales', async (req, res) => {
     for (const empName of employees) {
       const { data: existingEmp, error: empError } = await supabase.from('employees').select('id').eq('name', empName).single();
       if (empError && empError.code !== 'PGRST116') throw empError;
-      if (existingEmp) { 
-        empIdMap[empName] = existingEmp.id; 
-      } else {
+      if (existingEmp) { empIdMap[empName] = existingEmp.id; }
+      else {
         const { data: newEmp, error: insertError } = await supabase.from('employees').insert({ name: empName }).select('id').single();
         if (insertError) throw insertError;
         empIdMap[empName] = newEmp.id;
@@ -164,90 +152,29 @@ app.post('/api/sales', async (req, res) => {
     }
     
     const upsertData = async (table, data, conflictColumns) => { 
-      const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
-      if (error) throw error; 
+        const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
+        if (error) throw error; 
     };
 
     // --- Save Daily Bookings ---
     const dailyBookingsToUpsert = [];
-    for (const empName in dailyBookings) {
-      const empId = empIdMap[empName]; 
-      if (!empId) continue;
-      for (const month in dailyBookings[empName]) {
-        for (const day in dailyBookings[empName][month]) {
-          dailyBookingsToUpsert.push({
-            employee_id: empId, 
-            month: parseInt(month), 
-            day: parseInt(day), 
-            value: dailyBookings[empName][month][day] 
-          });
-        }
-      }
-    }
-    if (dailyBookingsToUpsert.length > 0) {
-      await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
-    }
+    for (const empName in dailyBookings) { const empId = empIdMap[empName]; if (!empId) continue; for (const month in dailyBookings[empName]) { for (const day in dailyBookings[empName][month]) { dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); } } } 
+    if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
     
     // --- Save Lead Summary ---
-    const leadSummaryToUpsert = [];
-    for (const empName in leadSummary) {
-      const empId = empIdMap[empName]; 
-      if (!empId) continue;
-      const summary = leadSummary[empName]; 
-      leadSummaryToUpsert.push({
-        employee_id: empId, 
-        fre: summary.pre, 
-        off: summary.off, 
-        rep: summary.rep, 
-        fam: summary.app
-      });
-    }
-    if (leadSummaryToUpsert.length > 0) {
-      await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
-    }
+    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } 
+    if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
 
     // --- Save Monthly Leads ---
-    const monthlyLeadsToUpsert = [];
-    for (const empName in monthlyLeads) {
-      const empId = empIdMap[empName]; 
-      if (!empId) continue;
-      for (let month = 0; month < 12; month++) {
-        monthlyLeadsToUpsert.push({
-          employee_id: empId, 
-          month: month, 
-          value: monthlyLeads[empName][month]
-        });
-      }
-    }
-    if (monthlyLeadsToUpsert.length > 0) {
-      await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
-    }
+    const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } 
+    if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
 
     // --- Save Batch Data ---
     if (batchData) {
-      const batchesToUpsert = batchData.batches.map(batch => ({ 
-        id: batch.id, 
-        label: batch.label, 
-        thc: batchData.thc[batch.id] || 0 
-      })); 
-      if (batchesToUpsert.length > 0) {
-        await upsertData('batches', batchesToUpsert, 'id'); 
-      }
-      const batchLeadsToUpsert = [];
-      for (const empName in batchData.batchLeads) {
-        const empId = empIdMap[empName]; 
-        if (!empId) continue;
-        for (const batchId in batchData.batchLeads[empName]) {
-          batchLeadsToUpsert.push({
-            employee_id: empId, 
-            batch_id: batchId, 
-            value: batchData.batchLeads[empName][batchId]
-          });
-        }
-      }
-      if (batchLeadsToUpsert.length > 0) {
-        await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
-      }
+        const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); 
+        if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); 
+        const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] }); } } 
+        if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
     }
 
     // --- Save Custom Headers ---
@@ -255,12 +182,7 @@ app.post('/api/sales', async (req, res) => {
       const { error: deleteHeadersError } = await supabase.from('custom_headers').delete().neq('id', 0);
       if (deleteHeadersError) throw deleteHeadersError;
       const headersToInsert = [];
-      for (const tableName in customHeaders) {
-        headersToInsert.push({ 
-          table_name: tableName, 
-          headers: customHeaders[tableName] 
-        });
-      }
+      for (const tableName in customHeaders) { headersToInsert.push({ table_name: tableName, headers: customHeaders[tableName] }); }
       if (headersToInsert.length > 0) {
         const { error: insertHeadersError } = await supabase.from('custom_headers').insert(headersToInsert);
         if (insertHeadersError) throw insertHeadersError;
@@ -274,26 +196,14 @@ app.post('/api/sales', async (req, res) => {
       if (deleteError) throw deleteError;
       const adminDataToInsert = [];
       for (const empName in monthlyBatchAdmin) {
-        const empId = empIdMap[empName]; 
-        if (!empId) continue;
+        const empId = empIdMap[empName]; if (!empId) continue;
         const leads = monthlyBatchAdmin[empName];
         adminDataToInsert.push({
-          employee_id: empId, 
-          lead_10_jul: leads[0] || 0, 
-          lead_29_jul: leads[1] || 0, 
-          lead_jul: leads[2] || 0,
-          lead_19_aug: leads[3] || 0, 
-          lead_aug: leads[4] || 0, 
-          lead_16_sep: leads[5] || 0,
-          lead_sep: leads[6] || 0, 
-          lead_13_oct: leads[7] || 0, 
-          lead_oct: leads[8] || 0,
-          lead_nov: leads[9] || 0, 
-          lead_dec: leads[10] || 0, 
-          lead_jan: leads[11] || 0,
-          lead_10_nov: leads[12] || 0, 
-          lead_20_nov: leads[13] || 0, 
-          lead_14_dec: leads[14] || 0
+          employee_id: empId, lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
+          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
+          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
+          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
+          lead_10_nov: leads[12] || 0, lead_20_nov: leads[13] || 0, lead_14_dec: leads[14] || 0
         });
       }
       if (adminDataToInsert.length > 0) {
@@ -307,10 +217,7 @@ app.post('/api/sales', async (req, res) => {
       console.log(">>> [SAVE-DEBUG] Step 8: Processing webinar leads...");
       const webinarLeadsToUpsert = [];
       for (const month in webinarLeads) {
-        webinarLeadsToUpsert.push({ 
-          month: month, 
-          lead_count: webinarLeads[month] 
-        });
+        webinarLeadsToUpsert.push({ month: month, lead_count: webinarLeads[month] });
       }
       if (webinarLeadsToUpsert.length > 0) {
         const { error: webinarError } = await supabase.from('webinar_leads').upsert(webinarLeadsToUpsert, { onConflict: 'month' });
@@ -333,104 +240,9 @@ app.post('/api/employee', async (req, res) => {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Employee name is required' });
     const { data, error } = await supabase.from('employees').insert({ name }).select().single();
-    if (error) { 
-      if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); 
-      throw error; 
-    }
+    if (error) { if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); throw error; }
     res.json({ success: true, employee: data });
-  } catch (error) { 
-    console.error('Error adding employee:', error); 
-    res.status(500).json({ error: 'Failed to add employee', details: error.message }); 
-  }
-});
-
-// Get webinar data for a specific year
-app.get('/api/webinar-data/:year', async (req, res) => {
-  try {
-    const { year } = req.params;
-    console.log(`>>> [DEBUG] Fetching webinar data for year: ${year}`);
-    
-    const { data, error } = await supabase
-      .from('yearly_webinar_leads')
-      .select('*')
-      .eq('year', parseInt(year));
-    
-    if (error) {
-      console.error(`Error fetching webinar data for year ${year}:`, error);
-      // If the table doesn't exist or no data found, return empty object
-      return res.json({});
-    }
-    
-    // Convert array to month-keyed object
-    const monthlyData = {};
-    if (data && data.length > 0) {
-      data.forEach(item => {
-        monthlyData[item.month] = item.lead_count;
-      });
-    }
-    
-    console.log(`>>> [DEBUG] Returning webinar data for year ${year}:`, monthlyData);
-    res.json(monthlyData);
-  } catch (error) {
-    console.error(`Error in GET /api/webinar-data/${req.params.year}:`, error);
-    res.status(500).json({ error: 'Failed to fetch webinar data', details: error.message });
-  }
-});
-
-// Save webinar data for a specific year
-app.post('/api/webinar-data/:year', async (req, res) => {
-  try {
-    const { year } = req.params;
-    const monthlyData = req.body;
-    
-    console.log(`>>> [DEBUG] Saving webinar data for year: ${year}`);
-    
-    // Convert the monthly data to an array of records
-    const recordsToInsert = [];
-    for (const month in monthlyData) {
-      recordsToInsert.push({
-        year: parseInt(year),
-        month: month,
-        lead_count: monthlyData[month]
-      });
-    }
-    
-    // Delete existing records for this year
-    const { error: deleteError } = await supabase
-      .from('yearly_webinar_leads')
-      .delete()
-      .eq('year', parseInt(year));
-    
-    if (deleteError) {
-      console.error(`Error deleting existing webinar data for year ${year}:`, deleteError);
-      // Continue even if delete fails (might be because no records exist)
-    }
-    
-    // Insert new records one by one to avoid the ID constraint issue
-    if (recordsToInsert.length > 0) {
-      for (const record of recordsToInsert) {
-        // Only include the fields that exist in the table, excluding the id field
-        const { error: insertError } = await supabase
-          .from('yearly_webinar_leads')
-          .insert({
-            year: record.year,
-            month: record.month,
-            lead_count: record.lead_count
-          });
-        
-        if (insertError) {
-          console.error(`Error inserting webinar data for year ${year}, month ${record.month}:`, insertError);
-          throw insertError;
-        }
-      }
-    }
-    
-    console.log(`>>> [DEBUG] Successfully saved webinar data for year: ${year}`);
-    res.json({ success: true });
-  } catch (error) {
-    console.error(`Error in POST /api/webinar-data/${req.params.year}:`, error);
-    res.status(500).json({ error: 'Failed to save webinar data', details: error.message });
-  }
+  } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
 });
 
 // Start Server
