@@ -60,7 +60,9 @@ app.get('/api/sales', async (req, res) => {
 
     const formattedData = {
       employees: employees.map(e => e.name),
-      dailyBookings: {}, leadSummary: {}, monthlyLeads: {},
+      dailyBookings: {}, 
+      leadSummary: {}, // Will be month-wise
+      monthlyLeads: {}, // Will be month-wise
       batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
       monthlyBatchAdmin: {},
       customHeaders: { // Provide default headers
@@ -78,6 +80,7 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
+    // Process daily bookings
     employees.forEach(emp => {
       formattedData.dailyBookings[emp.name] = {};
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
@@ -86,15 +89,35 @@ app.get('/api/sales', async (req, res) => {
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
       });
     });
+    
+    // Process lead summary - now month-wise
     employees.forEach(emp => {
-      const empSummary = leadSummary.find(s => s.employee_id === emp.id);
-      formattedData.leadSummary[emp.name] = empSummary ? { pre: empSummary.fre, off: empSummary.off, rep: empSummary.rep, app: empSummary.fam } : { pre: 0, off: 0, rep: 0, app: 0 };
+      formattedData.leadSummary[emp.name] = {};
+      // Initialize all months with default values
+      for (let month = 0; month < 12; month++) {
+        formattedData.leadSummary[emp.name][month] = { pre: 0, off: 0, rep: 0, app: 0 };
+      }
+      
+      // Fill with actual data from database
+      const empSummary = leadSummary.filter(s => s.employee_id === emp.id);
+      empSummary.forEach(summary => {
+        formattedData.leadSummary[emp.name][summary.month] = {
+          pre: summary.fre || 0,
+          off: summary.off || 0,
+          rep: summary.rep || 0,
+          app: summary.fam || 0
+        };
+      });
     });
+    
+    // Process monthly leads - already month-wise
     employees.forEach(emp => {
       const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
       formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
       empMonthly.forEach(month => formattedData.monthlyLeads[emp.name][month.month] = month.value);
     });
+    
+    // Process batch data
     employees.forEach(emp => {
         formattedData.batchData.batchLeads[emp.name] = {};
         batches.forEach(batch => {
@@ -103,6 +126,8 @@ app.get('/api/sales', async (req, res) => {
         });
     });
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
+    
+    // Process monthly batch admin
     employees.forEach(emp => {
       const adminData = monthlyBatchAdmin.find(m => m.employee_id === emp.id);
       if (adminData) {
@@ -117,6 +142,7 @@ app.get('/api/sales', async (req, res) => {
         formattedData.monthlyBatchAdmin[emp.name] = Array(15).fill(0);
       }
     });
+    
     // Process webinar leads
     if (webinarLeads && webinarLeads.length > 0) {
       webinarLeads.forEach(item => {
@@ -158,22 +184,97 @@ app.post('/api/sales', async (req, res) => {
 
     // --- Save Daily Bookings ---
     const dailyBookingsToUpsert = [];
-    for (const empName in dailyBookings) { const empId = empIdMap[empName]; if (!empId) continue; for (const month in dailyBookings[empName]) { for (const day in dailyBookings[empName][month]) { dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); } } } 
+    for (const empName in dailyBookings) { 
+      const empId = empIdMap[empName]; 
+      if (!empId) continue; 
+      for (const month in dailyBookings[empName]) { 
+        for (const day in dailyBookings[empName][month]) { 
+          dailyBookingsToUpsert.push({ 
+            employee_id: empId, 
+            month: parseInt(month), 
+            day: parseInt(day), 
+            value: dailyBookings[empName][month][day] 
+          }); 
+        } 
+      } 
+    } 
     if (dailyBookingsToUpsert.length > 0) await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
     
-    // --- Save Lead Summary ---
-    const leadSummaryToUpsert = []; for (const empName in leadSummary) { const empId = empIdMap[empName]; if (!empId) continue; const summary = leadSummary[empName]; leadSummaryToUpsert.push({ employee_id: empId, fre: summary.pre, off: summary.off, rep: summary.rep, fam: summary.app }); } 
-    if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id');
+    // --- Save Lead Summary (Month-wise) ---
+    const leadSummaryToUpsert = []; 
+    for (const empName in leadSummary) { 
+      const empId = empIdMap[empName]; 
+      if (!empId) continue;
+      
+      // Handle both old format (single object) and new format (month-wise)
+      if (typeof leadSummary[empName] === 'object' && !Array.isArray(leadSummary[empName])) {
+        // Check if it's the old format (with pre, off, rep, app properties)
+        if (leadSummary[empName].hasOwnProperty('pre')) {
+          // Old format - save for current month
+          const currentMonth = new Date().getMonth();
+          const summary = leadSummary[empName];
+          leadSummaryToUpsert.push({ 
+            employee_id: empId, 
+            month: currentMonth,
+            fre: summary.pre, 
+            off: summary.off, 
+            rep: summary.rep, 
+            fam: summary.app 
+          });
+        } else {
+          // New format - month-wise
+          for (const month in leadSummary[empName]) {
+            const summary = leadSummary[empName][month];
+            leadSummaryToUpsert.push({ 
+              employee_id: empId, 
+              month: parseInt(month),
+              fre: summary.pre, 
+              off: summary.off, 
+              rep: summary.rep, 
+              fam: summary.app 
+            });
+          }
+        }
+      }
+    } 
+    if (leadSummaryToUpsert.length > 0) await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id, month');
 
     // --- Save Monthly Leads ---
-    const monthlyLeadsToUpsert = []; for (const empName in monthlyLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (let month = 0; month < 12; month++) { monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] }); } } 
+    const monthlyLeadsToUpsert = []; 
+    for (const empName in monthlyLeads) { 
+      const empId = empIdMap[empName]; 
+      if (!empId) continue; 
+      for (let month = 0; month < 12; month++) { 
+        monthlyLeadsToUpsert.push({ 
+          employee_id: empId, 
+          month: month, 
+          value: monthlyLeads[empName][month] 
+        }); 
+      } 
+    } 
     if (monthlyLeadsToUpsert.length > 0) await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
 
     // --- Save Batch Data ---
     if (batchData) {
-        const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); 
+        const batchesToUpsert = batchData.batches.map(batch => ({ 
+          id: batch.id, 
+          label: batch.label, 
+          thc: batchData.thc[batch.id] || 0 
+        })); 
         if (batchesToUpsert.length > 0) await upsertData('batches', batchesToUpsert, 'id'); 
-        const batchLeadsToUpsert = []; for (const empName in batchData.batchLeads) { const empId = empIdMap[empName]; if (!empId) continue; for (const batchId in batchData.batchLeads[empName]) { batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] }); } } 
+        
+        const batchLeadsToUpsert = []; 
+        for (const empName in batchData.batchLeads) { 
+          const empId = empIdMap[empName]; 
+          if (!empId) continue; 
+          for (const batchId in batchData.batchLeads[empName]) { 
+            batchLeadsToUpsert.push({ 
+              employee_id: empId, 
+              batch_id: batchId, 
+              value: batchData.batchLeads[empName][batchId] 
+            }); 
+          } 
+        } 
         if (batchLeadsToUpsert.length > 0) await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
     }
 
@@ -182,7 +283,12 @@ app.post('/api/sales', async (req, res) => {
       const { error: deleteHeadersError } = await supabase.from('custom_headers').delete().neq('id', 0);
       if (deleteHeadersError) throw deleteHeadersError;
       const headersToInsert = [];
-      for (const tableName in customHeaders) { headersToInsert.push({ table_name: tableName, headers: customHeaders[tableName] }); }
+      for (const tableName in customHeaders) { 
+        headersToInsert.push({ 
+          table_name: tableName, 
+          headers: customHeaders[tableName] 
+        }); 
+      }
       if (headersToInsert.length > 0) {
         const { error: insertHeadersError } = await supabase.from('custom_headers').insert(headersToInsert);
         if (insertHeadersError) throw insertHeadersError;
@@ -196,14 +302,26 @@ app.post('/api/sales', async (req, res) => {
       if (deleteError) throw deleteError;
       const adminDataToInsert = [];
       for (const empName in monthlyBatchAdmin) {
-        const empId = empIdMap[empName]; if (!empId) continue;
+        const empId = empIdMap[empName]; 
+        if (!empId) continue;
         const leads = monthlyBatchAdmin[empName];
         adminDataToInsert.push({
-          employee_id: empId, lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
-          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
-          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
-          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
-          lead_10_nov: leads[12] || 0, lead_20_nov: leads[13] || 0, lead_14_dec: leads[14] || 0
+          employee_id: empId, 
+          lead_10_jul: leads[0] || 0, 
+          lead_29_jul: leads[1] || 0, 
+          lead_jul: leads[2] || 0,
+          lead_19_aug: leads[3] || 0, 
+          lead_aug: leads[4] || 0, 
+          lead_16_sep: leads[5] || 0,
+          lead_sep: leads[6] || 0, 
+          lead_13_oct: leads[7] || 0, 
+          lead_oct: leads[8] || 0,
+          lead_nov: leads[9] || 0, 
+          lead_dec: leads[10] || 0, 
+          lead_jan: leads[11] || 0,
+          lead_10_nov: leads[12] || 0, 
+          lead_20_nov: leads[13] || 0, 
+          lead_14_dec: leads[14] || 0
         });
       }
       if (adminDataToInsert.length > 0) {
@@ -217,7 +335,10 @@ app.post('/api/sales', async (req, res) => {
       console.log(">>> [SAVE-DEBUG] Step 8: Processing webinar leads...");
       const webinarLeadsToUpsert = [];
       for (const month in webinarLeads) {
-        webinarLeadsToUpsert.push({ month: month, lead_count: webinarLeads[month] });
+        webinarLeadsToUpsert.push({ 
+          month: month, 
+          lead_count: webinarLeads[month] 
+        });
       }
       if (webinarLeadsToUpsert.length > 0) {
         const { error: webinarError } = await supabase.from('webinar_leads').upsert(webinarLeadsToUpsert, { onConflict: 'month' });
@@ -240,10 +361,83 @@ app.post('/api/employee', async (req, res) => {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Employee name is required' });
     const { data, error } = await supabase.from('employees').insert({ name }).select().single();
-    if (error) { if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); throw error; }
+    if (error) { 
+      if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); 
+      throw error; 
+    }
     res.json({ success: true, employee: data });
-  } catch (error) { console.error('Error adding employee:', error); res.status(500).json({ error: 'Failed to add employee', details: error.message }); }
+  } catch (error) { 
+    console.error('Error adding employee:', error); 
+    res.status(500).json({ error: 'Failed to add employee', details: error.message }); 
+  }
+});
+
+// Get lead summary for a specific month
+app.get('/api/lead-summary/:month', async (req, res) => {
+  try {
+    const month = parseInt(req.params.month);
+    if (isNaN(month) || month < 0 || month > 11) {
+      return res.status(400).json({ error: 'Invalid month. Must be between 0 (January) and 11 (December).' });
+    }
+
+    const { data: employees, error: empError } = await supabase.from('employees').select('*');
+    if (empError) throw empError;
+
+    const { data: leadSummary, error: summaryError } = await supabase
+      .from('lead_summary')
+      .select('*')
+      .eq('month', month);
+    if (summaryError) throw summaryError;
+
+    const result = {};
+    employees.forEach(emp => {
+      const summary = leadSummary.find(s => s.employee_id === emp.id);
+      result[emp.name] = summary ? {
+        pre: summary.fre,
+        off: summary.off,
+        rep: summary.rep,
+        app: summary.fam
+      } : { pre: 0, off: 0, rep: 0, app: 0 };
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching lead summary:', error);
+    res.status(500).json({ error: 'Failed to fetch lead summary', details: error.message });
+  }
+});
+
+// Get monthly leads for a specific month
+app.get('/api/monthly-leads/:month', async (req, res) => {
+  try {
+    const month = parseInt(req.params.month);
+    if (isNaN(month) || month < 0 || month > 11) {
+      return res.status(400).json({ error: 'Invalid month. Must be between 0 (January) and 11 (December).' });
+    }
+
+    const { data: employees, error: empError } = await supabase.from('employees').select('*');
+    if (empError) throw empError;
+
+    const { data: monthlyLeads, error: monthlyError } = await supabase
+      .from('monthly_leads')
+      .select('*')
+      .eq('month', month);
+    if (monthlyError) throw monthlyError;
+
+    const result = {};
+    employees.forEach(emp => {
+      const lead = monthlyLeads.find(m => m.employee_id === emp.id);
+      result[emp.name] = lead ? lead.value : 0;
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching monthly leads:', error);
+    res.status(500).json({ error: 'Failed to fetch monthly leads', details: error.message });
+  }
 });
 
 // Start Server
-app.listen(port, () => { console.log(`Server is running on port ${port}`); });
+app.listen(port, () => { 
+  console.log(`Server is running on port ${port}`); 
+});
