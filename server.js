@@ -158,12 +158,14 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save ALL sales data, including webinar leads
+// Save ALL sales data, including webinar leads (WITH DETAILED LOGGING)
 app.post('/api/sales', async (req, res) => {
   try {
     const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
+    console.log(">>> [SAVE-DEBUG] Employees:", employees);
+    console.log(">>> [SAVE-DEBUG] Lead Summary Data Structure:", JSON.stringify(leadSummary, null, 2));
 
     const empIdMap = {};
     for (const empName of employees) {
@@ -176,10 +178,16 @@ app.post('/api/sales', async (req, res) => {
         empIdMap[empName] = newEmp.id;
       }
     }
+    console.log(">>> [SAVE-DEBUG] Employee ID Map:", empIdMap);
     
     const upsertData = async (table, data, conflictColumns) => { 
+        console.log(`>>> [SAVE-DEBUG] Preparing to upsert ${data.length} records into table '${table}'...`);
         const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
-        if (error) throw error; 
+        if (error) {
+            console.error(`!!! [SAVE-DEBUG] Error upserting into ${table}:`, error);
+            throw error; 
+        }
+        console.log(`>>> [SAVE-DEBUG] Successfully upserted into ${table}.`);
     };
 
     // --- Save Daily Bookings ---
@@ -206,34 +214,22 @@ app.post('/api/sales', async (req, res) => {
       const empId = empIdMap[empName]; 
       if (!empId) continue;
       
-      // Handle both old format (single object) and new format (month-wise)
-      if (typeof leadSummary[empName] === 'object' && !Array.isArray(leadSummary[empName])) {
-        // Check if it's the old format (with pre, off, rep, app properties)
-        if (leadSummary[empName].hasOwnProperty('pre')) {
-          // Old format - save for current month
-          const currentMonth = new Date().getMonth();
-          const summary = leadSummary[empName];
+      // We now expect the new month-wise format
+      const monthlySummary = leadSummary[empName];
+      if (typeof monthlySummary === 'object' && monthlySummary !== null) {
+        for (const monthKey in monthlySummary) {
+          const month = parseInt(monthKey, 10);
+          if (isNaN(month)) continue; // Skip invalid keys
+
+          const summary = monthlySummary[monthKey];
           leadSummaryToUpsert.push({ 
             employee_id: empId, 
-            month: currentMonth,
-            fre: summary.pre, 
-            off: summary.off, 
-            rep: summary.rep, 
-            fam: summary.app 
+            month: month,
+            fre: summary.pre || 0, 
+            off: summary.off || 0, 
+            rep: summary.rep || 0, 
+            fam: summary.app || 0 
           });
-        } else {
-          // New format - month-wise
-          for (const month in leadSummary[empName]) {
-            const summary = leadSummary[empName][month];
-            leadSummaryToUpsert.push({ 
-              employee_id: empId, 
-              month: parseInt(month),
-              fre: summary.pre, 
-              off: summary.off, 
-              rep: summary.rep, 
-              fam: summary.app 
-            });
-          }
         }
       }
     } 
@@ -248,7 +244,7 @@ app.post('/api/sales', async (req, res) => {
         monthlyLeadsToUpsert.push({ 
           employee_id: empId, 
           month: month, 
-          value: monthlyLeads[empName][month] 
+          value: monthlyLeads[empName][month] || 0 
         }); 
       } 
     } 
@@ -271,7 +267,7 @@ app.post('/api/sales', async (req, res) => {
             batchLeadsToUpsert.push({ 
               employee_id: empId, 
               batch_id: batchId, 
-              value: batchData.batchLeads[empName][batchId] 
+              value: batchData.batchLeads[empName][batchId] || 0
             }); 
           } 
         } 
@@ -332,7 +328,6 @@ app.post('/api/sales', async (req, res) => {
 
     // --- Save Webinar Leads ---
     if (webinarLeads) {
-      console.log(">>> [SAVE-DEBUG] Step 8: Processing webinar leads...");
       const webinarLeadsToUpsert = [];
       for (const month in webinarLeads) {
         webinarLeadsToUpsert.push({ 
