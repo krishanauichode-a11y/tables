@@ -22,7 +22,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- API Routes ---
 
-// Get ALL sales data, including webinar leads and custom headers
+// Get ALL sales data, including webinar leads, custom headers, and employee batches
 app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
@@ -35,7 +35,8 @@ app.get('/api/sales', async (req, res) => {
       { data: batches, error: batchesError },
       { data: monthlyBatchAdmin, error: batchAdminError },
       { data: customHeaders, error: headersError },
-      { data: webinarLeads, error: webinarError }
+      { data: webinarLeads, error: webinarError },
+      { data: employeeBatches, error: empBatchesError }
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -45,7 +46,8 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('batches').select('*'),
       supabase.from('monthly_batch_admin_leads').select('*'),
       supabase.from('custom_headers').select('*'),
-      supabase.from('webinar_leads').select('*')
+      supabase.from('webinar_leads').select('*'),
+      supabase.from('employee_batches').select('*')
     ]);
 
     // Check for all errors
@@ -55,6 +57,7 @@ app.get('/api/sales', async (req, res) => {
     if (batchAdminError) throw batchAdminError;
     if (headersError) throw headersError;
     if (webinarError) throw webinarError;
+    if (empBatchesError) throw empBatchesError;
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
@@ -68,7 +71,8 @@ app.get('/api/sales', async (req, res) => {
       customHeaders: { // Provide default headers
         daily: [], summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"], monthly: ["Team Member"], batch: ["Team Member"], batchTable: ["Team Member"]
       },
-      webinarLeads: {}
+      webinarLeads: {},
+      employeeBatches: {} // New field to track which batch each employee belongs to
     };
 
     // Process custom headers
@@ -79,6 +83,12 @@ app.get('/api/sales', async (req, res) => {
         }
       });
     }
+
+    // Process employee batches
+    employees.forEach(emp => {
+      const batchAssignment = employeeBatches.find(b => b.employee_id === emp.id);
+      formattedData.employeeBatches[emp.name] = batchAssignment ? batchAssignment.batch_id : null;
+    });
 
     // Process daily bookings
     employees.forEach(emp => {
@@ -158,10 +168,10 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save ALL sales data, including webinar leads (WITH DETAILED LOGGING)
+// Save ALL sales data, including webinar leads and employee batches (WITH DETAILED LOGGING)
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads } = req.body;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
     console.log(">>> [SAVE-DEBUG] Employees:", employees);
@@ -326,6 +336,30 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
+    // --- Save Employee Batches ---
+    if (employeeBatches) {
+      const employeeIds = Object.values(empIdMap);
+      const { error: deleteError } = await supabase.from('employee_batches').delete().in('employee_id', employeeIds);
+      if (deleteError) throw deleteError;
+      
+      const batchAssignmentsToInsert = [];
+      for (const empName in employeeBatches) {
+        const empId = empIdMap[empName]; 
+        if (!empId) continue;
+        const batchId = employeeBatches[empName];
+        if (batchId) { // Only insert if a batch is assigned
+          batchAssignmentsToInsert.push({
+            employee_id: empId, 
+            batch_id: batchId
+          });
+        }
+      }
+      if (batchAssignmentsToInsert.length > 0) {
+        const { error: insertError } = await supabase.from('employee_batches').insert(batchAssignmentsToInsert);
+        if (insertError) throw insertError;
+      }
+    }
+
     // --- Save Webinar Leads ---
     if (webinarLeads) {
       const webinarLeadsToUpsert = [];
@@ -353,30 +387,67 @@ app.post('/api/sales', async (req, res) => {
 // Add new employee
 app.post('/api/employee', async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, batchId } = req.body;
     if (!name) return res.status(400).json({ error: 'Employee name is required' });
-    const { data, error } = await supabase.from('employees').insert({ name }).select().single();
-    if (error) { 
-      if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); 
-      throw error; 
+    
+    // Insert the employee
+    const { data: newEmployee, error: empError } = await supabase.from('employees').insert({ name }).select().single();
+    if (empError) { 
+      if (empError.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); 
+      throw empError; 
     }
-    res.json({ success: true, employee: data });
+    
+    // If a batch ID was provided, assign the employee to that batch
+    if (batchId) {
+      const { error: batchError } = await supabase.from('employee_batches').insert({
+        employee_id: newEmployee.id, // This is now a UUID
+        batch_id: batchId
+      });
+      if (batchError) throw batchError;
+    }
+    
+    res.json({ success: true, employee: newEmployee });
   } catch (error) { 
     console.error('Error adding employee:', error); 
     res.status(500).json({ error: 'Failed to add employee', details: error.message }); 
   }
 });
 
-// Get lead summary for a specific month
+// Get lead summary for a specific month and batch
 app.get('/api/lead-summary/:month', async (req, res) => {
   try {
     const month = parseInt(req.params.month);
+    const batchId = req.query.batchId; // Optional batch filter
     if (isNaN(month) || month < 0 || month > 11) {
       return res.status(400).json({ error: 'Invalid month. Must be between 0 (January) and 11 (December).' });
     }
 
-    const { data: employees, error: empError } = await supabase.from('employees').select('*');
-    if (empError) throw empError;
+    // Get employees, optionally filtered by batch
+    let employees;
+    
+    if (batchId) {
+      // Get employees in the specified batch
+      const { data: empBatches, error: batchError } = await supabase
+        .from('employee_batches')
+        .select('employee_id')
+        .eq('batch_id', batchId);
+      
+      if (batchError) throw batchError;
+      
+      const employeeIds = empBatches.map(eb => eb.employee_id);
+      const { data, error } = await supabase
+        .from('employees')
+        .select('*')
+        .in('id', employeeIds);
+      
+      if (error) throw error;
+      employees = data;
+    } else {
+      // Get all employees
+      const { data, error } = await supabase.from('employees').select('*');
+      if (error) throw error;
+      employees = data;
+    }
 
     const { data: leadSummary, error: summaryError } = await supabase
       .from('lead_summary')
@@ -402,16 +473,41 @@ app.get('/api/lead-summary/:month', async (req, res) => {
   }
 });
 
-// Get monthly leads for a specific month
+// Get monthly leads for a specific month and batch
 app.get('/api/monthly-leads/:month', async (req, res) => {
   try {
     const month = parseInt(req.params.month);
+    const batchId = req.query.batchId; // Optional batch filter
     if (isNaN(month) || month < 0 || month > 11) {
       return res.status(400).json({ error: 'Invalid month. Must be between 0 (January) and 11 (December).' });
     }
 
-    const { data: employees, error: empError } = await supabase.from('employees').select('*');
-    if (empError) throw empError;
+    // Get employees, optionally filtered by batch
+    let employees;
+    
+    if (batchId) {
+      // Get employees in the specified batch
+      const { data: empBatches, error: batchError } = await supabase
+        .from('employee_batches')
+        .select('employee_id')
+        .eq('batch_id', batchId);
+      
+      if (batchError) throw batchError;
+      
+      const employeeIds = empBatches.map(eb => eb.employee_id);
+      const { data, error } = await supabase
+        .from('employees')
+        .select('*')
+        .in('id', employeeIds);
+      
+      if (error) throw error;
+      employees = data;
+    } else {
+      // Get all employees
+      const { data, error } = await supabase.from('employees').select('*');
+      if (error) throw error;
+      employees = data;
+    }
 
     const { data: monthlyLeads, error: monthlyError } = await supabase
       .from('monthly_leads')
@@ -430,6 +526,144 @@ app.get('/api/monthly-leads/:month', async (req, res) => {
     console.error('Error fetching monthly leads:', error);
     res.status(500).json({ error: 'Failed to fetch monthly leads', details: error.message });
   }
+});
+
+// Get all batches
+app.get('/api/batches', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('batches').select('*');
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching batches:', error);
+    res.status(500).json({ error: 'Failed to fetch batches', details: error.message });
+  }
+});
+
+// Update employee batch assignment
+app.put('/api/employee/:id/batch', async (req, res) => {
+  try {
+    const employeeId = req.params.id; // This should be a UUID string
+    const { batchId } = req.body;
+    
+    // Validate that employeeId is a valid UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(employeeId)) {
+      return res.status(400).json({ error: 'Invalid employee ID format' });
+    }
+    
+    // Check if employee exists
+    const { data: employee, error: empError } = await supabase
+      .from('employees')
+      .select('id')
+      .eq('id', employeeId)
+      .single();
+    
+    if (empError || !employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+    
+    // Delete existing batch assignment
+    const { error: deleteError } = await supabase
+      .from('employee_batches')
+      .delete()
+      .eq('employee_id', employeeId);
+    
+    if (deleteError) throw deleteError;
+    
+    // Add new batch assignment if batchId is provided
+    if (batchId) {
+      const { error: insertError } = await supabase
+        .from('employee_batches')
+        .insert({
+          employee_id: employeeId, // UUID
+          batch_id: batchId
+        });
+      
+      if (insertError) throw insertError;
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating employee batch:', error);
+    res.status(500).json({ error: 'Failed to update employee batch', details: error.message });
+  }
+});
+
+// Get employees by batch
+app.get('/api/employees/by-batch/:batchId', async (req, res) => {
+  try {
+    const batchId = req.params.batchId;
+    
+    // Get employee IDs from the batch
+    const { data: empBatches, error: batchError } = await supabase
+      .from('employee_batches')
+      .select('employee_id')
+      .eq('batch_id', batchId);
+    
+    if (batchError) throw batchError;
+    
+    if (empBatches.length === 0) {
+      return res.json([]); // No employees in this batch
+    }
+    
+    const employeeIds = empBatches.map(eb => eb.employee_id);
+    
+    // Get employee details
+    const { data: employees, error: empError } = await supabase
+      .from('employees')
+      .select('*')
+      .in('id', employeeIds);
+    
+    if (empError) throw empError;
+    
+    res.json(employees);
+  } catch (error) {
+    console.error('Error fetching employees by batch:', error);
+    res.status(500).json({ error: 'Failed to fetch employees by batch', details: error.message });
+  }
+});
+
+// Get employee batch assignment
+app.get('/api/employee/:name/batch', async (req, res) => {
+  try {
+    const employeeName = req.params.name;
+    
+    // Get employee by name
+    const { data: employee, error: empError } = await supabase
+      .from('employees')
+      .select('id')
+      .eq('name', employeeName)
+      .single();
+    
+    if (empError || !employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+    
+    // Get batch assignment
+    const { data: batchAssignment, error: batchError } = await supabase
+      .from('employee_batches')
+      .select('batch_id')
+      .eq('employee_id', employee.id)
+      .single();
+    
+    if (batchError && batchError.code !== 'PGRST116') {
+      throw batchError;
+    }
+    
+    res.json({ 
+      employeeId: employee.id,
+      batchId: batchAssignment ? batchAssignment.batch_id : null 
+    });
+  } catch (error) {
+    console.error('Error fetching employee batch:', error);
+    res.status(500).json({ error: 'Failed to fetch employee batch', details: error.message });
+  }
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
 // Start Server
