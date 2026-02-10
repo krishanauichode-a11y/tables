@@ -20,6 +20,74 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Helper function to ensure database schema is up to date
+async function ensureDatabaseSchema() {
+  try {
+    console.log("Checking database schema...");
+    
+    // Check if year column exists in webinar_leads table
+    const { data: columns, error: columnsError } = await supabase
+      .from('information_schema.columns')
+      .select('column_name')
+      .eq('table_name', 'webinar_leads')
+      .eq('column_name', 'year');
+    
+    if (columnsError) {
+      console.error("Error checking columns:", columnsError);
+      return false;
+    }
+    
+    // If year column doesn't exist, add it
+    if (!columns || columns.length === 0) {
+      console.log("Year column doesn't exist, adding it...");
+      
+      // Try to add the column using raw SQL
+      const { error: alterError } = await supabase.rpc('execute_sql', {
+        sql: 'ALTER TABLE webinar_leads ADD COLUMN IF NOT EXISTS year INTEGER NOT NULL DEFAULT 2025'
+      });
+      
+      if (alterError) {
+        console.error("Error adding year column:", alterError);
+        
+        // Try alternative approach if RPC doesn't work
+        try {
+          // This won't work in Supabase without proper permissions, but let's try
+          const { error: directError } = await supabase
+            .from('webinar_leads')
+            .update({ year: 2025 })
+            .is('year', null);
+            
+          if (directError && directError.code !== 'PGRST116') {
+            console.error("Error with direct update:", directError);
+            return false;
+          }
+        } catch (e) {
+          console.error("Alternative approach failed:", e);
+          return false;
+        }
+      } else {
+        console.log("Year column added successfully");
+      }
+    } else {
+      console.log("Year column already exists");
+    }
+    
+    return true;
+  } catch (error) {
+    console.error("Error ensuring database schema:", error);
+    return false;
+  }
+}
+
+// Initialize database schema on server start
+ensureDatabaseSchema().then(success => {
+  if (!success) {
+    console.warn("Warning: Could not ensure database schema is up to date. Some features may not work correctly.");
+  }
+}).catch(error => {
+  console.error("Error initializing database schema:", error);
+});
+
 // --- API Routes ---
 
 // Get ALL sales data, including webinar leads, custom headers, and employee batches
@@ -290,7 +358,7 @@ app.post('/api/sales', async (req, res) => {
             batchLeadsToUpsert.push({ 
               employee_id: empId, 
               batch_id: batchId, 
-              value: batchData.batchLeads[empName][batchId] || 0
+              value: batchData.batchLeads[emp.name][batchId] || 0
             }); 
           } 
         } 
@@ -375,44 +443,103 @@ app.post('/api/sales', async (req, res) => {
 
     // --- Save Webinar Leads ---
     if (webinarLeads) {
-      // First, delete existing webinar leads
-      const { error: deleteError } = await supabase.from('webinar_leads').delete().neq('id', 0);
-      if (deleteError) throw deleteError;
+      // First, check if year column exists
+      const { data: columns, error: columnsError } = await supabase
+        .from('information_schema.columns')
+        .select('column_name')
+        .eq('table_name', 'webinar_leads')
+        .eq('column_name', 'year');
       
-      const webinarLeadsToInsert = [];
-      
-      // Check if webinarLeads is already organized by year (new format)
-      if (typeof webinarLeads === 'object' && !Array.isArray(webinarLeads)) {
-        // New format with years
-        for (const year in webinarLeads) {
-          const yearData = webinarLeads[year];
-          if (typeof yearData === 'object') {
-            for (const month in yearData) {
-              webinarLeadsToInsert.push({
-                year: parseInt(year),
-                month: month,
-                lead_count: yearData[month]
-              });
+      if (columnsError) {
+        console.error("Error checking columns:", columnsError);
+      } else if (!columns || columns.length === 0) {
+        console.log("Year column doesn't exist, using fallback approach");
+        
+        // Fallback: Try to save without year column
+        const webinarLeadsToInsert = [];
+        
+        // Check if webinarLeads is already organized by year (new format)
+        if (typeof webinarLeads === 'object' && !Array.isArray(webinarLeads)) {
+          // New format with years - just use the first year for now
+          for (const year in webinarLeads) {
+            const yearData = webinarLeads[year];
+            if (typeof yearData === 'object') {
+              for (const month in yearData) {
+                webinarLeadsToInsert.push({
+                  month: month,
+                  lead_count: yearData[month]
+                });
+              }
+              break; // Only process the first year for now
             }
+          }
+        } else {
+          // Old format without years
+          for (const month in webinarLeads) {
+            webinarLeadsToInsert.push({
+              month: month,
+              lead_count: webinarLeads[month]
+            });
+          }
+        }
+        
+        if (webinarLeadsToInsert.length > 0) {
+          console.log(">>> [SAVE-DEBUG] Inserting webinar leads (fallback):", webinarLeadsToInsert);
+          
+          // Delete existing records
+          const { error: deleteError } = await supabase.from('webinar_leads').delete().neq('id', 0);
+          if (deleteError) throw deleteError;
+          
+          // Insert new records
+          const { error: webinarError } = await supabase.from('webinar_leads').insert(webinarLeadsToInsert);
+          if (webinarError) {
+            console.error("!!! [SAVE-DEBUG] Error inserting webinar leads (fallback):", webinarError);
+            throw webinarError;
           }
         }
       } else {
-        // Old format without years - assume 2025
-        for (const month in webinarLeads) {
-          webinarLeadsToInsert.push({
-            year: 2025,
-            month: month,
-            lead_count: webinarLeads[month]
-          });
+        // Year column exists, use the full functionality
+        const webinarLeadsToInsert = [];
+        
+        // Check if webinarLeads is already organized by year (new format)
+        if (typeof webinarLeads === 'object' && !Array.isArray(webinarLeads)) {
+          // New format with years
+          for (const year in webinarLeads) {
+            const yearData = webinarLeads[year];
+            if (typeof yearData === 'object') {
+              for (const month in yearData) {
+                webinarLeadsToInsert.push({
+                  year: parseInt(year),
+                  month: month,
+                  lead_count: yearData[month]
+                });
+              }
+            }
+          }
+        } else {
+          // Old format without years - assume 2025
+          for (const month in webinarLeads) {
+            webinarLeadsToInsert.push({
+              year: 2025,
+              month: month,
+              lead_count: webinarLeads[month]
+            });
+          }
         }
-      }
-      
-      if (webinarLeadsToInsert.length > 0) {
-        console.log(">>> [SAVE-DEBUG] Inserting webinar leads:", webinarLeadsToInsert);
-        const { error: webinarError } = await supabase.from('webinar_leads').insert(webinarLeadsToInsert);
-        if (webinarError) {
-          console.error("!!! [SAVE-DEBUG] Error inserting webinar leads:", webinarError);
-          throw webinarError;
+        
+        if (webinarLeadsToInsert.length > 0) {
+          console.log(">>> [SAVE-DEBUG] Inserting webinar leads (full):", webinarLeadsToInsert);
+          
+          // Delete existing records
+          const { error: deleteError } = await supabase.from('webinar_leads').delete().neq('id', 0);
+          if (deleteError) throw deleteError;
+          
+          // Insert new records
+          const { error: webinarError } = await supabase.from('webinar_leads').insert(webinarLeadsToInsert);
+          if (webinarError) {
+            console.error("!!! [SAVE-DEBUG] Error inserting webinar leads (full):", webinarError);
+            throw webinarError;
+          }
         }
       }
     }
@@ -711,20 +838,52 @@ app.get('/api/webinar-leads/:year', async (req, res) => {
       return res.status(400).json({ error: 'Invalid year format' });
     }
 
-    const { data, error } = await supabase
-      .from('webinar_leads')
-      .select('*')
-      .eq('year', year);
+    // Check if year column exists
+    const { data: columns, error: columnsError } = await supabase
+      .from('information_schema.columns')
+      .select('column_name')
+      .eq('table_name', 'webinar_leads')
+      .eq('column_name', 'year');
     
-    if (error) throw error;
+    if (columnsError) {
+      console.error("Error checking columns:", columnsError);
+      return res.status(500).json({ error: 'Failed to check database schema', details: columnsError.message });
+    }
     
-    // Format the data as month: lead_count
-    const result = {};
-    data.forEach(item => {
-      result[item.month] = item.lead_count;
-    });
+    let data;
     
-    res.json(result);
+    if (!columns || columns.length === 0) {
+      // Year column doesn't exist, just return all webinar leads
+      const { data: allLeads, error: leadsError } = await supabase
+        .from('webinar_leads')
+        .select('*');
+      
+      if (leadsError) throw leadsError;
+      
+      // Format the data as month: lead_count
+      const result = {};
+      allLeads.forEach(item => {
+        result[item.month] = item.lead_count;
+      });
+      
+      return res.json(result);
+    } else {
+      // Year column exists, filter by year
+      const { data: yearLeads, error: leadsError } = await supabase
+        .from('webinar_leads')
+        .select('*')
+        .eq('year', year);
+      
+      if (leadsError) throw leadsError;
+      
+      // Format the data as month: lead_count
+      const result = {};
+      yearLeads.forEach(item => {
+        result[item.month] = item.lead_count;
+      });
+      
+      return res.json(result);
+    }
   } catch (error) {
     console.error('Error fetching webinar leads:', error);
     res.status(500).json({ error: 'Failed to fetch webinar leads', details: error.message });
