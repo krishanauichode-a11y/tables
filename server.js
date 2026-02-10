@@ -20,77 +20,9 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Helper function to ensure database schema is up to date
-async function ensureDatabaseSchema() {
-  try {
-    console.log("Checking database schema...");
-    
-    // Check if year column exists in webinar_leads table
-    const { data: columns, error: columnsError } = await supabase
-      .from('information_schema.columns')
-      .select('column_name')
-      .eq('table_name', 'webinar_leads')
-      .eq('column_name', 'year');
-    
-    if (columnsError) {
-      console.error("Error checking columns:", columnsError);
-      return false;
-    }
-    
-    // If year column doesn't exist, add it
-    if (!columns || columns.length === 0) {
-      console.log("Year column doesn't exist, adding it...");
-      
-      // Try to add the column using raw SQL
-      const { error: alterError } = await supabase.rpc('execute_sql', {
-        sql: 'ALTER TABLE webinar_leads ADD COLUMN IF NOT EXISTS year INTEGER NOT NULL DEFAULT 2025'
-      });
-      
-      if (alterError) {
-        console.error("Error adding year column:", alterError);
-        
-        // Try alternative approach if RPC doesn't work
-        try {
-          // This won't work in Supabase without proper permissions, but let's try
-          const { error: directError } = await supabase
-            .from('webinar_leads')
-            .update({ year: 2025 })
-            .is('year', null);
-            
-          if (directError && directError.code !== 'PGRST116') {
-            console.error("Error with direct update:", directError);
-            return false;
-          }
-        } catch (e) {
-          console.error("Alternative approach failed:", e);
-          return false;
-        }
-      } else {
-        console.log("Year column added successfully");
-      }
-    } else {
-      console.log("Year column already exists");
-    }
-    
-    return true;
-  } catch (error) {
-    console.error("Error ensuring database schema:", error);
-    return false;
-  }
-}
-
-// Initialize database schema on server start
-ensureDatabaseSchema().then(success => {
-  if (!success) {
-    console.warn("Warning: Could not ensure database schema is up to date. Some features may not work correctly.");
-  }
-}).catch(error => {
-  console.error("Error initializing database schema:", error);
-});
-
 // --- API Routes ---
 
-// Get ALL sales data, including webinar leads, custom headers, and employee batches
+// Get ALL sales data, including webinar leads and custom headers
 app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
@@ -103,8 +35,7 @@ app.get('/api/sales', async (req, res) => {
       { data: batches, error: batchesError },
       { data: monthlyBatchAdmin, error: batchAdminError },
       { data: customHeaders, error: headersError },
-      { data: webinarLeads, error: webinarError },
-      { data: employeeBatches, error: empBatchesError }
+      { data: webinarLeads, error: webinarError }
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -114,8 +45,7 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('batches').select('*'),
       supabase.from('monthly_batch_admin_leads').select('*'),
       supabase.from('custom_headers').select('*'),
-      supabase.from('webinar_leads').select('*'),
-      supabase.from('employee_batches').select('*')
+      supabase.from('webinar_leads').select('*')
     ]);
 
     // Check for all errors
@@ -125,7 +55,6 @@ app.get('/api/sales', async (req, res) => {
     if (batchAdminError) throw batchAdminError;
     if (headersError) throw headersError;
     if (webinarError) throw webinarError;
-    if (empBatchesError) throw empBatchesError;
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
@@ -139,8 +68,7 @@ app.get('/api/sales', async (req, res) => {
       customHeaders: { // Provide default headers
         daily: [], summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"], monthly: ["Team Member"], batch: ["Team Member"], batchTable: ["Team Member"]
       },
-      webinarLeads: {}, // Now organized by year
-      employeeBatches: {} // New field to track which batch each employee belongs to
+      webinarLeads: {}
     };
 
     // Process custom headers
@@ -151,12 +79,6 @@ app.get('/api/sales', async (req, res) => {
         }
       });
     }
-
-    // Process employee batches
-    employees.forEach(emp => {
-      const batchAssignment = employeeBatches.find(b => b.employee_id === emp.id);
-      formattedData.employeeBatches[emp.name] = batchAssignment ? batchAssignment.batch_id : null;
-    });
 
     // Process daily bookings
     employees.forEach(emp => {
@@ -221,23 +143,10 @@ app.get('/api/sales', async (req, res) => {
       }
     });
     
-    // Process webinar leads - now organized by year
+    // Process webinar leads
     if (webinarLeads && webinarLeads.length > 0) {
       webinarLeads.forEach(item => {
-        // Check if the record has a year property (new format)
-        if (item.year !== undefined) {
-          // New format with year
-          if (!formattedData.webinarLeads[item.year]) {
-            formattedData.webinarLeads[item.year] = {};
-          }
-          formattedData.webinarLeads[item.year][item.month] = item.lead_count;
-        } else {
-          // Old format without year - assume 2025 as default year
-          if (!formattedData.webinarLeads["2025"]) {
-            formattedData.webinarLeads["2025"] = {};
-          }
-          formattedData.webinarLeads["2025"][item.month] = item.lead_count;
-        }
+        formattedData.webinarLeads[item.month] = item.lead_count;
       });
     }
 
@@ -249,14 +158,14 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save ALL sales data, including webinar leads and employee batches (WITH DETAILED LOGGING)
+// Save ALL sales data, including webinar leads (WITH DETAILED LOGGING)
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches } = req.body;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
     console.log(">>> [SAVE-DEBUG] Employees:", employees);
-    console.log(">>> [SAVE-DEBUG] Webinar Leads Data Structure:", JSON.stringify(webinarLeads, null, 2));
+    console.log(">>> [SAVE-DEBUG] Lead Summary Data Structure:", JSON.stringify(leadSummary, null, 2));
 
     const empIdMap = {};
     for (const empName of employees) {
@@ -358,7 +267,7 @@ app.post('/api/sales', async (req, res) => {
             batchLeadsToUpsert.push({ 
               employee_id: empId, 
               batch_id: batchId, 
-              value: batchData.batchLeads[emp.name][batchId] || 0
+              value: batchData.batchLeads[empName][batchId] || 0
             }); 
           } 
         } 
@@ -417,130 +326,18 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- Save Employee Batches ---
-    if (employeeBatches) {
-      const employeeIds = Object.values(empIdMap);
-      const { error: deleteError } = await supabase.from('employee_batches').delete().in('employee_id', employeeIds);
-      if (deleteError) throw deleteError;
-      
-      const batchAssignmentsToInsert = [];
-      for (const empName in employeeBatches) {
-        const empId = empIdMap[empName]; 
-        if (!empId) continue;
-        const batchId = employeeBatches[empName];
-        if (batchId) { // Only insert if a batch is assigned
-          batchAssignmentsToInsert.push({
-            employee_id: empId, 
-            batch_id: batchId
-          });
-        }
-      }
-      if (batchAssignmentsToInsert.length > 0) {
-        const { error: insertError } = await supabase.from('employee_batches').insert(batchAssignmentsToInsert);
-        if (insertError) throw insertError;
-      }
-    }
-
     // --- Save Webinar Leads ---
     if (webinarLeads) {
-      // First, check if year column exists
-      const { data: columns, error: columnsError } = await supabase
-        .from('information_schema.columns')
-        .select('column_name')
-        .eq('table_name', 'webinar_leads')
-        .eq('column_name', 'year');
-      
-      if (columnsError) {
-        console.error("Error checking columns:", columnsError);
-      } else if (!columns || columns.length === 0) {
-        console.log("Year column doesn't exist, using fallback approach");
-        
-        // Fallback: Try to save without year column
-        const webinarLeadsToInsert = [];
-        
-        // Check if webinarLeads is already organized by year (new format)
-        if (typeof webinarLeads === 'object' && !Array.isArray(webinarLeads)) {
-          // New format with years - just use the first year for now
-          for (const year in webinarLeads) {
-            const yearData = webinarLeads[year];
-            if (typeof yearData === 'object') {
-              for (const month in yearData) {
-                webinarLeadsToInsert.push({
-                  month: month,
-                  lead_count: yearData[month]
-                });
-              }
-              break; // Only process the first year for now
-            }
-          }
-        } else {
-          // Old format without years
-          for (const month in webinarLeads) {
-            webinarLeadsToInsert.push({
-              month: month,
-              lead_count: webinarLeads[month]
-            });
-          }
-        }
-        
-        if (webinarLeadsToInsert.length > 0) {
-          console.log(">>> [SAVE-DEBUG] Inserting webinar leads (fallback):", webinarLeadsToInsert);
-          
-          // Delete existing records
-          const { error: deleteError } = await supabase.from('webinar_leads').delete().neq('id', 0);
-          if (deleteError) throw deleteError;
-          
-          // Insert new records
-          const { error: webinarError } = await supabase.from('webinar_leads').insert(webinarLeadsToInsert);
-          if (webinarError) {
-            console.error("!!! [SAVE-DEBUG] Error inserting webinar leads (fallback):", webinarError);
-            throw webinarError;
-          }
-        }
-      } else {
-        // Year column exists, use the full functionality
-        const webinarLeadsToInsert = [];
-        
-        // Check if webinarLeads is already organized by year (new format)
-        if (typeof webinarLeads === 'object' && !Array.isArray(webinarLeads)) {
-          // New format with years
-          for (const year in webinarLeads) {
-            const yearData = webinarLeads[year];
-            if (typeof yearData === 'object') {
-              for (const month in yearData) {
-                webinarLeadsToInsert.push({
-                  year: parseInt(year),
-                  month: month,
-                  lead_count: yearData[month]
-                });
-              }
-            }
-          }
-        } else {
-          // Old format without years - assume 2025
-          for (const month in webinarLeads) {
-            webinarLeadsToInsert.push({
-              year: 2025,
-              month: month,
-              lead_count: webinarLeads[month]
-            });
-          }
-        }
-        
-        if (webinarLeadsToInsert.length > 0) {
-          console.log(">>> [SAVE-DEBUG] Inserting webinar leads (full):", webinarLeadsToInsert);
-          
-          // Delete existing records
-          const { error: deleteError } = await supabase.from('webinar_leads').delete().neq('id', 0);
-          if (deleteError) throw deleteError;
-          
-          // Insert new records
-          const { error: webinarError } = await supabase.from('webinar_leads').insert(webinarLeadsToInsert);
-          if (webinarError) {
-            console.error("!!! [SAVE-DEBUG] Error inserting webinar leads (full):", webinarError);
-            throw webinarError;
-          }
-        }
+      const webinarLeadsToUpsert = [];
+      for (const month in webinarLeads) {
+        webinarLeadsToUpsert.push({ 
+          month: month, 
+          lead_count: webinarLeads[month] 
+        });
+      }
+      if (webinarLeadsToUpsert.length > 0) {
+        const { error: webinarError } = await supabase.from('webinar_leads').upsert(webinarLeadsToUpsert, { onConflict: 'month' });
+        if (webinarError) throw webinarError;
       }
     }
 
@@ -556,67 +353,30 @@ app.post('/api/sales', async (req, res) => {
 // Add new employee
 app.post('/api/employee', async (req, res) => {
   try {
-    const { name, batchId } = req.body;
+    const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Employee name is required' });
-    
-    // Insert the employee
-    const { data: newEmployee, error: empError } = await supabase.from('employees').insert({ name }).select().single();
-    if (empError) { 
-      if (empError.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); 
-      throw empError; 
+    const { data, error } = await supabase.from('employees').insert({ name }).select().single();
+    if (error) { 
+      if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); 
+      throw error; 
     }
-    
-    // If a batch ID was provided, assign the employee to that batch
-    if (batchId) {
-      const { error: batchError } = await supabase.from('employee_batches').insert({
-        employee_id: newEmployee.id, // This is now a UUID
-        batch_id: batchId
-      });
-      if (batchError) throw batchError;
-    }
-    
-    res.json({ success: true, employee: newEmployee });
+    res.json({ success: true, employee: data });
   } catch (error) { 
     console.error('Error adding employee:', error); 
     res.status(500).json({ error: 'Failed to add employee', details: error.message }); 
   }
 });
 
-// Get lead summary for a specific month and batch
+// Get lead summary for a specific month
 app.get('/api/lead-summary/:month', async (req, res) => {
   try {
     const month = parseInt(req.params.month);
-    const batchId = req.query.batchId; // Optional batch filter
     if (isNaN(month) || month < 0 || month > 11) {
       return res.status(400).json({ error: 'Invalid month. Must be between 0 (January) and 11 (December).' });
     }
 
-    // Get employees, optionally filtered by batch
-    let employees;
-    
-    if (batchId) {
-      // Get employees in the specified batch
-      const { data: empBatches, error: batchError } = await supabase
-        .from('employee_batches')
-        .select('employee_id')
-        .eq('batch_id', batchId);
-      
-      if (batchError) throw batchError;
-      
-      const employeeIds = empBatches.map(eb => eb.employee_id);
-      const { data, error } = await supabase
-        .from('employees')
-        .select('*')
-        .in('id', employeeIds);
-      
-      if (error) throw error;
-      employees = data;
-    } else {
-      // Get all employees
-      const { data, error } = await supabase.from('employees').select('*');
-      if (error) throw error;
-      employees = data;
-    }
+    const { data: employees, error: empError } = await supabase.from('employees').select('*');
+    if (empError) throw empError;
 
     const { data: leadSummary, error: summaryError } = await supabase
       .from('lead_summary')
@@ -642,41 +402,16 @@ app.get('/api/lead-summary/:month', async (req, res) => {
   }
 });
 
-// Get monthly leads for a specific month and batch
+// Get monthly leads for a specific month
 app.get('/api/monthly-leads/:month', async (req, res) => {
   try {
     const month = parseInt(req.params.month);
-    const batchId = req.query.batchId; // Optional batch filter
     if (isNaN(month) || month < 0 || month > 11) {
       return res.status(400).json({ error: 'Invalid month. Must be between 0 (January) and 11 (December).' });
     }
 
-    // Get employees, optionally filtered by batch
-    let employees;
-    
-    if (batchId) {
-      // Get employees in the specified batch
-      const { data: empBatches, error: batchError } = await supabase
-        .from('employee_batches')
-        .select('employee_id')
-        .eq('batch_id', batchId);
-      
-      if (batchError) throw batchError;
-      
-      const employeeIds = empBatches.map(eb => eb.employee_id);
-      const { data, error } = await supabase
-        .from('employees')
-        .select('*')
-        .in('id', employeeIds);
-      
-      if (error) throw error;
-      employees = data;
-    } else {
-      // Get all employees
-      const { data, error } = await supabase.from('employees').select('*');
-      if (error) throw error;
-      employees = data;
-    }
+    const { data: employees, error: empError } = await supabase.from('employees').select('*');
+    if (empError) throw empError;
 
     const { data: monthlyLeads, error: monthlyError } = await supabase
       .from('monthly_leads')
@@ -695,204 +430,6 @@ app.get('/api/monthly-leads/:month', async (req, res) => {
     console.error('Error fetching monthly leads:', error);
     res.status(500).json({ error: 'Failed to fetch monthly leads', details: error.message });
   }
-});
-
-// Get all batches
-app.get('/api/batches', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('batches').select('*');
-    if (error) throw error;
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching batches:', error);
-    res.status(500).json({ error: 'Failed to fetch batches', details: error.message });
-  }
-});
-
-// Update employee batch assignment
-app.put('/api/employee/:id/batch', async (req, res) => {
-  try {
-    const employeeId = req.params.id; // This should be a UUID string
-    const { batchId } = req.body;
-    
-    // Validate that employeeId is a valid UUID
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(employeeId)) {
-      return res.status(400).json({ error: 'Invalid employee ID format' });
-    }
-    
-    // Check if employee exists
-    const { data: employee, error: empError } = await supabase
-      .from('employees')
-      .select('id')
-      .eq('id', employeeId)
-      .single();
-    
-    if (empError || !employee) {
-      return res.status(404).json({ error: 'Employee not found' });
-    }
-    
-    // Delete existing batch assignment
-    const { error: deleteError } = await supabase
-      .from('employee_batches')
-      .delete()
-      .eq('employee_id', employeeId);
-    
-    if (deleteError) throw deleteError;
-    
-    // Add new batch assignment if batchId is provided
-    if (batchId) {
-      const { error: insertError } = await supabase
-        .from('employee_batches')
-        .insert({
-          employee_id: employeeId, // UUID
-          batch_id: batchId
-        });
-      
-      if (insertError) throw insertError;
-    }
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error updating employee batch:', error);
-    res.status(500).json({ error: 'Failed to update employee batch', details: error.message });
-  }
-});
-
-// Get employees by batch
-app.get('/api/employees/by-batch/:batchId', async (req, res) => {
-  try {
-    const batchId = req.params.batchId;
-    
-    // Get employee IDs from the batch
-    const { data: empBatches, error: batchError } = await supabase
-      .from('employee_batches')
-      .select('employee_id')
-      .eq('batch_id', batchId);
-    
-    if (batchError) throw batchError;
-    
-    if (empBatches.length === 0) {
-      return res.json([]); // No employees in this batch
-    }
-    
-    const employeeIds = empBatches.map(eb => eb.employee_id);
-    
-    // Get employee details
-    const { data: employees, error: empError } = await supabase
-      .from('employees')
-      .select('*')
-      .in('id', employeeIds);
-    
-    if (empError) throw empError;
-    
-    res.json(employees);
-  } catch (error) {
-    console.error('Error fetching employees by batch:', error);
-    res.status(500).json({ error: 'Failed to fetch employees by batch', details: error.message });
-  }
-});
-
-// Get employee batch assignment
-app.get('/api/employee/:name/batch', async (req, res) => {
-  try {
-    const employeeName = req.params.name;
-    
-    // Get employee by name
-    const { data: employee, error: empError } = await supabase
-      .from('employees')
-      .select('id')
-      .eq('name', employeeName)
-      .single();
-    
-    if (empError || !employee) {
-      return res.status(404).json({ error: 'Employee not found' });
-    }
-    
-    // Get batch assignment
-    const { data: batchAssignment, error: batchError } = await supabase
-      .from('employee_batches')
-      .select('batch_id')
-      .eq('employee_id', employee.id)
-      .single();
-    
-    if (batchError && batchError.code !== 'PGRST116') {
-      throw batchError;
-    }
-    
-    res.json({ 
-      employeeId: employee.id,
-      batchId: batchAssignment ? batchAssignment.batch_id : null 
-    });
-  } catch (error) {
-    console.error('Error fetching employee batch:', error);
-    res.status(500).json({ error: 'Failed to fetch employee batch', details: error.message });
-  }
-});
-
-// Get webinar leads by year
-app.get('/api/webinar-leads/:year', async (req, res) => {
-  try {
-    const year = parseInt(req.params.year);
-    if (isNaN(year)) {
-      return res.status(400).json({ error: 'Invalid year format' });
-    }
-
-    // Check if year column exists
-    const { data: columns, error: columnsError } = await supabase
-      .from('information_schema.columns')
-      .select('column_name')
-      .eq('table_name', 'webinar_leads')
-      .eq('column_name', 'year');
-    
-    if (columnsError) {
-      console.error("Error checking columns:", columnsError);
-      return res.status(500).json({ error: 'Failed to check database schema', details: columnsError.message });
-    }
-    
-    let data;
-    
-    if (!columns || columns.length === 0) {
-      // Year column doesn't exist, just return all webinar leads
-      const { data: allLeads, error: leadsError } = await supabase
-        .from('webinar_leads')
-        .select('*');
-      
-      if (leadsError) throw leadsError;
-      
-      // Format the data as month: lead_count
-      const result = {};
-      allLeads.forEach(item => {
-        result[item.month] = item.lead_count;
-      });
-      
-      return res.json(result);
-    } else {
-      // Year column exists, filter by year
-      const { data: yearLeads, error: leadsError } = await supabase
-        .from('webinar_leads')
-        .select('*')
-        .eq('year', year);
-      
-      if (leadsError) throw leadsError;
-      
-      // Format the data as month: lead_count
-      const result = {};
-      yearLeads.forEach(item => {
-        result[item.month] = item.lead_count;
-      });
-      
-      return res.json(result);
-    }
-  } catch (error) {
-    console.error('Error fetching webinar leads:', error);
-    res.status(500).json({ error: 'Failed to fetch webinar leads', details: error.message });
-  }
-});
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
 // Start Server
