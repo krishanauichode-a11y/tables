@@ -71,7 +71,7 @@ app.get('/api/sales', async (req, res) => {
       customHeaders: { // Provide default headers
         daily: [], summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"], monthly: ["Team Member"], batch: ["Team Member"], batchTable: ["Team Member"]
       },
-      webinarLeads: {},
+      webinarLeads: {}, // Now organized by year
       employeeBatches: {} // New field to track which batch each employee belongs to
     };
 
@@ -153,10 +153,23 @@ app.get('/api/sales', async (req, res) => {
       }
     });
     
-    // Process webinar leads
+    // Process webinar leads - now organized by year
     if (webinarLeads && webinarLeads.length > 0) {
       webinarLeads.forEach(item => {
-        formattedData.webinarLeads[item.month] = item.lead_count;
+        // Check if the record has a year property (new format)
+        if (item.year !== undefined) {
+          // New format with year
+          if (!formattedData.webinarLeads[item.year]) {
+            formattedData.webinarLeads[item.year] = {};
+          }
+          formattedData.webinarLeads[item.year][item.month] = item.lead_count;
+        } else {
+          // Old format without year - assume 2025 as default year
+          if (!formattedData.webinarLeads["2025"]) {
+            formattedData.webinarLeads["2025"] = {};
+          }
+          formattedData.webinarLeads["2025"][item.month] = item.lead_count;
+        }
       });
     }
 
@@ -362,15 +375,40 @@ app.post('/api/sales', async (req, res) => {
 
     // --- Save Webinar Leads ---
     if (webinarLeads) {
-      const webinarLeadsToUpsert = [];
-      for (const month in webinarLeads) {
-        webinarLeadsToUpsert.push({ 
-          month: month, 
-          lead_count: webinarLeads[month] 
-        });
+      // First, delete existing webinar leads
+      const { error: deleteError } = await supabase.from('webinar_leads').delete().neq('id', 0);
+      if (deleteError) throw deleteError;
+      
+      const webinarLeadsToInsert = [];
+      
+      // Check if webinarLeads is already organized by year (new format)
+      if (typeof webinarLeads === 'object' && !Array.isArray(webinarLeads)) {
+        // New format with years
+        for (const year in webinarLeads) {
+          const yearData = webinarLeads[year];
+          if (typeof yearData === 'object') {
+            for (const month in yearData) {
+              webinarLeadsToInsert.push({
+                year: parseInt(year),
+                month: month,
+                lead_count: yearData[month]
+              });
+            }
+          }
+        }
+      } else {
+        // Old format without years - assume 2025
+        for (const month in webinarLeads) {
+          webinarLeadsToInsert.push({
+            year: 2025,
+            month: month,
+            lead_count: webinarLeads[month]
+          });
+        }
       }
-      if (webinarLeadsToUpsert.length > 0) {
-        const { error: webinarError } = await supabase.from('webinar_leads').upsert(webinarLeadsToUpsert, { onConflict: 'month' });
+      
+      if (webinarLeadsToInsert.length > 0) {
+        const { error: webinarError } = await supabase.from('webinar_leads').insert(webinarLeadsToInsert);
         if (webinarError) throw webinarError;
       }
     }
@@ -658,6 +696,34 @@ app.get('/api/employee/:name/batch', async (req, res) => {
   } catch (error) {
     console.error('Error fetching employee batch:', error);
     res.status(500).json({ error: 'Failed to fetch employee batch', details: error.message });
+  }
+});
+
+// Get webinar leads by year
+app.get('/api/webinar-leads/:year', async (req, res) => {
+  try {
+    const year = parseInt(req.params.year);
+    if (isNaN(year)) {
+      return res.status(400).json({ error: 'Invalid year format' });
+    }
+
+    const { data, error } = await supabase
+      .from('webinar_leads')
+      .select('*')
+      .eq('year', year);
+    
+    if (error) throw error;
+    
+    // Format the data as month: lead_count
+    const result = {};
+    data.forEach(item => {
+      result[item.month] = item.lead_count;
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching webinar leads:', error);
+    res.status(500).json({ error: 'Failed to fetch webinar leads', details: error.message });
   }
 });
 
