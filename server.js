@@ -188,7 +188,7 @@ app.post('/api/sales', async (req, res) => {
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
     console.log(">>> [SAVE-DEBUG] Employees:", employees);
-    console.log(">>> [SAVE-DEBUG] Lead Summary Data Structure:", JSON.stringify(leadSummary, null, 2));
+    console.log(">>> [SAVE-DEBUG] Webinar Leads Data Structure:", JSON.stringify(webinarLeads, null, 2));
 
     const empIdMap = {};
     for (const empName of employees) {
@@ -408,8 +408,12 @@ app.post('/api/sales', async (req, res) => {
       }
       
       if (webinarLeadsToInsert.length > 0) {
+        console.log(">>> [SAVE-DEBUG] Inserting webinar leads:", webinarLeadsToInsert);
         const { error: webinarError } = await supabase.from('webinar_leads').insert(webinarLeadsToInsert);
-        if (webinarError) throw webinarError;
+        if (webinarError) {
+          console.error("!!! [SAVE-DEBUG] Error inserting webinar leads:", webinarError);
+          throw webinarError;
+        }
       }
     }
 
