@@ -14,14 +14,10 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Initialize Supabase client with environment variables
-// IMPORTANT: Create a .env file in the same directory with your SUPABASE_URL and SUPABASE_KEY
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-if (!supabaseUrl || !supabaseKey) {
-    console.error('!!! FATAL ERROR: SUPABASE_URL and SUPABASE_KEY must be set in .env file !!!');
-    process.exit(1);
-}
+// Initialize Supabase client
+// WARNING: Move these to environment variables for production!
+const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- API Routes ---
@@ -354,3 +350,4 @@ app.post('/api/employee', async (req, res) => {
 app.listen(port, () => { 
   console.log(`Server is running on http://localhost:${port}`); 
 });
+
