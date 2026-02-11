@@ -36,7 +36,8 @@ app.get('/api/sales', async (req, res) => {
       { data: monthlyBatchAdmin, error: batchAdminError },
       { data: customHeaders, error: headersError },
       { data: webinarLeads, error: webinarError },
-      { data: employeeBatches, error: empBatchesError } // Fetch employee batches
+      { data: employeeBatches, error: empBatchesError }, // Fetch employee batches
+      { data: batchMonthMapping, error: batchMappingError } // NEW: Fetch batch-month mappings
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -47,7 +48,8 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('monthly_batch_admin_leads').select('*'),
       supabase.from('custom_headers').select('*'),
       supabase.from('webinar_leads').select('*'),
-      supabase.from('employee_batches').select('*') // New table
+      supabase.from('employee_batches').select('*'), // Existing table
+      supabase.from('batch_month_mapping').select('*').order('batch_index') // NEW: Fetch batch-month mappings
     ]);
 
     // Check for all errors
@@ -58,6 +60,7 @@ app.get('/api/sales', async (req, res) => {
     if (headersError) throw headersError;
     if (webinarError) throw webinarError;
     if (empBatchesError) throw empBatchesError;
+    if (batchMappingError) throw batchMappingError;
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
@@ -72,8 +75,19 @@ app.get('/api/sales', async (req, res) => {
         daily: [], summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"], monthly: ["Team Member"], batch: ["Team Member"], batchTable: ["Team Member"]
       },
       webinarLeads: {},
-      employeeBatches: {} // Add employee batches to the response
+      employeeBatches: {}, // Add employee batches to the response
+      batchToMonthMapping: [] // NEW: Add batch-to-month mappings
     };
+
+    // Process batch-to-month mappings
+    if (batchMonthMapping && batchMonthMapping.length > 0) {
+      formattedData.batchToMonthMapping = batchMonthMapping.map(mapping => ({
+        batchIndex: mapping.batch_index,
+        batchName: mapping.batch_name,
+        monthIndex: mapping.month_index,
+        monthName: mapping.month_name
+      }));
+    }
 
     // Process employee batches
     employees.forEach(emp => {
@@ -173,7 +187,7 @@ app.get('/api/sales', async (req, res) => {
 // Save ALL sales data, including webinar leads and employee batches
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches } = req.body;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches, batchToMonthMapping } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
 
@@ -306,7 +320,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // --- Save Employee Batches --- NEW
+    // --- Save Employee Batches --- EXISTING
     if (employeeBatches) {
         await supabase.from('employee_batches').delete().neq('id', 0); // Clear existing
         const batchAssignments = [];
@@ -318,6 +332,26 @@ app.post('/api/sales', async (req, res) => {
             const { error: insertError } = await supabase.from('employee_batches').insert(batchAssignments);
             if (insertError) throw insertError;
         }
+    }
+    
+    // --- Save Batch-Month Mappings --- NEW
+    if (batchToMonthMapping) {
+      // Clear existing mappings
+      const { error: deleteError } = await supabase.from('batch_month_mapping').delete().neq('id', 0);
+      if (deleteError) throw deleteError;
+      
+      // Insert new mappings
+      const mappingsToInsert = batchToMonthMapping.map(mapping => ({
+        batch_index: mapping.batchIndex,
+        batch_name: mapping.batchName,
+        month_index: mapping.monthIndex,
+        month_name: mapping.monthName
+      }));
+      
+      if (mappingsToInsert.length > 0) {
+        const { error: insertError } = await supabase.from('batch_month_mapping').insert(mappingsToInsert);
+        if (insertError) throw insertError;
+      }
     }
 
     console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
@@ -350,4 +384,3 @@ app.post('/api/employee', async (req, res) => {
 app.listen(port, () => { 
   console.log(`Server is running on http://localhost:${port}`); 
 });
-
