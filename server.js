@@ -5,25 +5,14 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 const path = require('path');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const cookieParser = require('cookie-parser');
 
 // --- App Initialization ---
 const app = express();
 const port = process.env.PORT || 3000;
 
 // --- Middleware ---
-// Updated CORS configuration to handle credentials properly
-app.use(cors());
-
-// Handle preflight requests
-app.options('*', cors());
+app.use(cor));
 app.use(express.json());
-app.use(cookieParser());
-
-// JWT Secret - In production, use environment variable
-const JWT_SECRET = process.env.JWT_SECRET || 'KwwM3J8MpBRZ1s7AuICI3N8mFRDjqOtk4KVanX8prhm0nVHIhsMhmt9DuaYP73X1LESan4ZnQxAKa014vaIO/w==';
 
 // Initialize Supabase client
 // WARNING: Move these to environment variables for production!
@@ -31,265 +20,10 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- Authentication Middleware ---
-const authenticateToken = (req, res, next) => {
-  const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-  
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
-};
-
-// --- Authentication Routes ---
-
-// Admin Registration Route
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { username, password, name, email } = req.body;
-    
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-    
-    // Check if user already exists
-    const { data: existingUser, error: checkError } = await supabase
-      .from('admin_users')
-      .select('*')
-      .eq('username', username)
-      .single();
-    
-    if (checkError && checkError.code !== 'PGRST116') {
-      throw checkError;
-    }
-    
-    if (existingUser) {
-      return res.status(409).json({ error: 'Username already exists' });
-    }
-    
-    // Hash password
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
-    
-    // Create admin user
-    const { data: newUser, error: insertError } = await supabase
-      .from('admin_users')
-      .insert({
-        username,
-        password_hash: passwordHash,
-        name: name || username,
-        email: email || null,
-        role: 'admin',
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-    
-    if (insertError) throw insertError;
-    
-    // Return success without the password hash
-    const { password_hash, ...userWithoutPassword } = newUser;
-    
-    res.status(201).json({
-      success: true,
-      message: 'Admin user created successfully',
-      user: userWithoutPassword
-    });
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({ error: 'Failed to register admin user' });
-  }
-});
-
-// Login endpoint
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-    
-    // Fetch admin user from database
-    const { data: adminUser, error } = await supabase
-      .from('admin_users')
-      .select('*')
-      .eq('username', username)
-      .single();
-    
-    if (error || !adminUser) {
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-    
-    // Compare password with stored hash
-    const isPasswordValid = await bcrypt.compare(password, adminUser.password_hash);
-    
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-    
-    // Create JWT token
-    const token = jwt.sign(
-      { id: adminUser.id, username: adminUser.username, role: adminUser.role },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-    
-    // Set HTTP-only cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 24 * 60 * 60 * 1000,
-      sameSite: 'lax'
-    });
-    
-    // Return user info (excluding password hash)
-    const { password_hash, ...userWithoutPassword } = adminUser;
-    
-    res.json({
-      success: true,
-      user: userWithoutPassword
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Server error during login' });
-  }
-});
-
-// Logout endpoint
-app.post('/api/auth/logout', (req, res) => {
-  res.clearCookie('token');
-  res.json({ success: true, message: 'Logged out successfully' });
-});
-
-// Check authentication status
-app.get('/api/auth/status', authenticateToken, (req, res) => {
-  res.json({
-    authenticated: true,
-    user: {
-      id: req.user.id,
-      username: req.user.username,
-      role: req.user.role
-    }
-  });
-});
-
-// Create initial admin (for first-time setup)
-app.get('/api/setup', async (req, res) => {
-  try {
-    // Check if any admin users exist
-    const { data: existingAdmins, error: checkError } = await supabase
-      .from('admin_users')
-      .select('id')
-      .limit(1);
-    
-    if (checkError) throw checkError;
-    
-    if (existingAdmins && existingAdmins.length > 0) {
-      return res.status(400).json({ error: 'Admin users already exist' });
-    }
-    
-    // Create default admin
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash('admin123', saltRounds);
-    
-    const { data: adminUser, error: insertError } = await supabase
-      .from('admin_users')
-      .insert({
-        username: 'admin',
-        password_hash: passwordHash,
-        name: 'System Administrator',
-        role: 'admin',
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-    
-    if (insertError) throw insertError;
-    
-    res.status(201).json({
-      success: true,
-      message: 'Default admin user created',
-      user: {
-        id: adminUser.id,
-        username: adminUser.username,
-        name: adminUser.name,
-        role: adminUser.role
-      }
-    });
-  } catch (error) {
-    console.error('Setup error:', error);
-    res.status(500).json({ error: 'Failed to create default admin' });
-  }
-});
-
-// Create admin user (for initial setup)
-app.post('/api/auth/setup', async (req, res) => {
-  try {
-    // Check if any admin users exist
-    const { data: existingAdmins, error: countError } = await supabase
-      .from('admin_users')
-      .select('id')
-      .limit(1);
-    
-    if (countError) throw countError;
-    
-    if (existingAdmins && existingAdmins.length > 0) {
-      return res.status(400).json({ error: 'Admin users already exist' });
-    }
-    
-    const { username, password, name = 'Administrator' } = req.body;
-    
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-    
-    // Hash password
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
-    
-    // Create admin user
-    const { data: adminUser, error: insertError } = await supabase
-      .from('admin_users')
-      .insert({
-        username,
-        password_hash: passwordHash,
-        name,
-        role: 'admin',
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-    
-    if (insertError) throw insertError;
-    
-    res.status(201).json({
-      success: true,
-      message: 'Admin user created successfully',
-      user: {
-        id: adminUser.id,
-        username: adminUser.username,
-        name: adminUser.name,
-        role: adminUser.role
-      }
-    });
-  } catch (error) {
-    console.error('Setup error:', error);
-    res.status(500).json({ error: 'Failed to create admin user' });
-  }
-});
-
 // --- API Routes ---
 
 // Get ALL sales data, including webinar leads and custom headers
-app.get('/api/sales', authenticateToken, async (req, res) => {
+app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
     const [
@@ -302,8 +36,8 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       { data: monthlyBatchAdmin, error: batchAdminError },
       { data: customHeaders, error: headersError },
       { data: webinarLeads, error: webinarError },
-      { data: employeeBatches, error: empBatchesError },
-      { data: batchMonthMapping, error: batchMappingError }
+      { data: employeeBatches, error: empBatchesError }, // Fetch employee batches
+      { data: batchMonthMapping, error: batchMappingError } // NEW: Fetch batch-month mappings
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -314,17 +48,14 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       supabase.from('monthly_batch_admin_leads').select('*'),
       supabase.from('custom_headers').select('*'),
       supabase.from('webinar_leads').select('*'),
-      supabase.from('employee_batches').select('*'),
-      supabase.from('batch_month_mapping').select('*').order('batch_index')
+      supabase.from('employee_batches').select('*'), // Existing table
+      supabase.from('batch_month_mapping').select('*').order('batch_index') // NEW: Fetch batch-month mappings
     ]);
 
     // Check for all errors
-    if (empError) throw empError; 
-    if (dailyError) throw dailyError;
-    if (summaryError) throw summaryError; 
-    if (monthlyError) throw monthlyError;
-    if (batchError) throw batchError; 
-    if (batchesError) throw batchesError;
+    if (empError) throw empError; if (dailyError) throw dailyError;
+    if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
+    if (batchError) throw batchError; if (batchesError) throw batchesError;
     if (batchAdminError) throw batchAdminError;
     if (headersError) throw headersError;
     if (webinarError) throw webinarError;
@@ -341,15 +72,11 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
       monthlyBatchAdmin: {},
       customHeaders: {
-        daily: [], 
-        summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"], 
-        monthly: ["Team Member"], 
-        batch: ["Team Member"], 
-        batchTable: ["Team Member"]
+        daily: [], summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"], monthly: ["Team Member"], batch: ["Team Member"], batchTable: ["Team Member"]
       },
       webinarLeads: {},
-      employeeBatches: {},
-      batchToMonthMapping: []
+      employeeBatches: {}, // Add employee batches to the response
+      batchToMonthMapping: [] // NEW: Add batch-to-month mappings
     };
 
     // Process batch-to-month mappings
@@ -382,9 +109,7 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       formattedData.dailyBookings[emp.name] = {};
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
       empDailyBookings.forEach(booking => {
-        if (!formattedData.dailyBookings[emp.name][booking.month]) {
-          formattedData.dailyBookings[emp.name][booking.month] = {};
-        }
+        if (!formattedData.dailyBookings[emp.name][booking.month]) formattedData.dailyBookings[emp.name][booking.month] = {};
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
       });
     });
@@ -443,7 +168,7 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
     formattedData.webinarLeads = {};
     if (webinarLeads && webinarLeads.length > 0) {
       webinarLeads.forEach(item => {
-        const year = item.year;
+        const year = item.year; // Assumes 'year' column exists in DB
         if (!formattedData.webinarLeads[year]) {
           formattedData.webinarLeads[year] = {};
         }
@@ -460,7 +185,7 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
 });
 
 // Save ALL sales data, including webinar leads and employee batches
-app.post('/api/sales', authenticateToken, async (req, res) => {
+app.post('/api/sales', async (req, res) => {
   try {
     const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches, batchToMonthMapping } = req.body;
     
@@ -470,9 +195,8 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
     for (const empName of employees) {
       const { data: existingEmp, error: empError } = await supabase.from('employees').select('id').eq('name', empName).single();
       if (empError && empError.code !== 'PGRST116') throw empError;
-      if (existingEmp) { 
-        empIdMap[empName] = existingEmp.id; 
-      } else {
+      if (existingEmp) { empIdMap[empName] = existingEmp.id; }
+      else {
         const { data: newEmp, error: insertError } = await supabase.from('employees').insert({ name: empName }).select('id').single();
         if (insertError) throw insertError;
         empIdMap[empName] = newEmp.id;
@@ -488,16 +212,10 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
     // --- Save Daily Bookings ---
     const dailyBookingsToUpsert = [];
     for (const empName in dailyBookings) { 
-      const empId = empIdMap[empName]; 
-      if (!empId) continue; 
+      const empId = empIdMap[empName]; if (!empId) continue; 
       for (const month in dailyBookings[empName]) { 
         for (const day in dailyBookings[empName][month]) { 
-          dailyBookingsToUpsert.push({ 
-            employee_id: empId, 
-            month: parseInt(month), 
-            day: parseInt(day), 
-            value: dailyBookings[empName][month][day] 
-          }); 
+          dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); 
         } 
       } 
     } 
@@ -506,22 +224,14 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
     // --- Save Lead Summary (Month-wise) ---
     const leadSummaryToUpsert = []; 
     for (const empName in leadSummary) { 
-      const empId = empIdMap[empName]; 
-      if (!empId) continue;
+      const empId = empIdMap[empName]; if (!empId) continue;
       const monthlySummary = leadSummary[empName];
       if (typeof monthlySummary === 'object' && monthlySummary !== null) {
         for (const monthKey in monthlySummary) {
           const month = parseInt(monthKey, 10);
           if (isNaN(month)) continue;
           const summary = monthlySummary[monthKey];
-          leadSummaryToUpsert.push({ 
-            employee_id: empId, 
-            month: month, 
-            fre: summary.pre || 0, 
-            off: summary.off || 0, 
-            rep: summary.rep || 0, 
-            fam: summary.app || 0 
-          });
+          leadSummaryToUpsert.push({ employee_id: empId, month: month, fre: summary.pre || 0, off: summary.off || 0, rep: summary.rep || 0, fam: summary.app || 0 });
         }
       }
     } 
@@ -530,37 +240,23 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
     // --- Save Monthly Leads ---
     const monthlyLeadsToUpsert = []; 
     for (const empName in monthlyLeads) { 
-      const empId = empIdMap[empName]; 
-      if (!empId) continue; 
+      const empId = empIdMap[empName]; if (!empId) continue; 
       for (let month = 0; month < 12; month++) { 
-        monthlyLeadsToUpsert.push({ 
-          employee_id: empId, 
-          month: month, 
-          value: monthlyLeads[empName][month] || 0 
-        }); 
+        monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] || 0 }); 
       } 
     } 
     await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
 
     // --- Save Batch Data ---
     if (batchData) {
-        const batchesToUpsert = batchData.batches.map(batch => ({ 
-          id: batch.id, 
-          label: batch.label, 
-          thc: batchData.thc[batch.id] || 0 
-        })); 
+        const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); 
         await upsertData('batches', batchesToUpsert, 'id'); 
         
         const batchLeadsToUpsert = []; 
         for (const empName in batchData.batchLeads) { 
-          const empId = empIdMap[empName]; 
-          if (!empId) continue; 
+          const empId = empIdMap[empName]; if (!empId) continue; 
           for (const batchId in batchData.batchLeads[empName]) { 
-            batchLeadsToUpsert.push({ 
-              employee_id: empId, 
-              batch_id: batchId, 
-              value: batchData.batchLeads[empName][batchId] || 0 
-            });
+            batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] || 0 });
           } 
         } 
         await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
@@ -586,26 +282,14 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
       await supabase.from('monthly_batch_admin_leads').delete().in('employee_id', employeeIds);
       const adminDataToInsert = [];
       for (const empName in monthlyBatchAdmin) {
-        const empId = empIdMap[empName]; 
-        if (!empId) continue;
+        const empId = empIdMap[empName]; if (!empId) continue;
         const leads = monthlyBatchAdmin[empName];
         adminDataToInsert.push({
-          employee_id: empId, 
-          lead_10_jul: leads[0] || 0, 
-          lead_29_jul: leads[1] || 0, 
-          lead_jul: leads[2] || 0,
-          lead_19_aug: leads[3] || 0, 
-          lead_aug: leads[4] || 0, 
-          lead_16_sep: leads[5] || 0,
-          lead_sep: leads[6] || 0, 
-          lead_13_oct: leads[7] || 0, 
-          lead_oct: leads[8] || 0,
-          lead_nov: leads[9] || 0, 
-          lead_dec: leads[10] || 0, 
-          lead_jan: leads[11] || 0,
-          lead_10_nov: leads[12] || 0, 
-          lead_20_nov: leads[13] || 0, 
-          lead_14_dec: leads[14] || 0
+          employee_id: empId, lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
+          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
+          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
+          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
+          lead_10_nov: leads[12] || 0, lead_20_nov: leads[13] || 0, lead_14_dec: leads[14] || 0
         });
       }
       if (adminDataToInsert.length > 0) {
@@ -619,11 +303,7 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
       const webinarLeadsToUpsert = [];
       for (const year in webinarLeads) {
         for (const month in webinarLeads[year]) {
-          webinarLeadsToUpsert.push({ 
-            year: year, 
-            month: month, 
-            lead_count: webinarLeads[year][month] 
-          });
+          webinarLeadsToUpsert.push({ year: year, month: month, lead_count: webinarLeads[year][month] });
         }
       }
       
@@ -645,12 +325,8 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
         await supabase.from('employee_batches').delete().neq('id', 0); // Clear existing
         const batchAssignments = [];
         for (const empName in employeeBatches) {
-            const empId = empIdMap[empName]; 
-            if (!empId || !employeeBatches[empName]) continue;
-            batchAssignments.push({ 
-              employee_id: empId, 
-              batch_id: employeeBatches[empName] 
-            });
+            const empId = empIdMap[empName]; if (!empId || !employeeBatches[empName]) continue;
+            batchAssignments.push({ employee_id: empId, batch_id: employeeBatches[empName] });
         }
         if (batchAssignments.length > 0) {
             const { error: insertError } = await supabase.from('employee_batches').insert(batchAssignments);
@@ -688,7 +364,7 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
 });
 
 // Add new employee
-app.post('/api/employee', authenticateToken, async (req, res) => {
+app.post('/api/employee', async (req, res) => {
   try {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Employee name is required' });
@@ -704,11 +380,7 @@ app.post('/api/employee', authenticateToken, async (req, res) => {
   }
 });
 
-// Serve static files (for serving HTML files)
-app.use(express.static(path.join(__dirname)));
-
 // Start Server
 app.listen(port, () => { 
   console.log(`Server is running on http://localhost:${port}`); 
-  console.log(`Access the setup page at: http://localhost:${port}/api/setup`);
 });
