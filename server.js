@@ -5,6 +5,8 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 const path = require('path');
+const bcrypt = require('bcrypt');
+const cookieParser = require('cookie-parser');
 
 // --- App Initialization ---
 const app = express();
@@ -13,6 +15,8 @@ const port = process.env.PORT || 3000;
 // --- Middleware ---
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser());
+
 
 // Initialize Supabase client
 // WARNING: Move these to environment variables for production!
@@ -20,10 +24,161 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// --- Authentication Middleware ---
+const authenticateToken = (req, res, next) => {
+  const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// --- Authentication Routes ---
+
+// Login endpoint
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    
+    // Fetch admin user from database
+    const { data: adminUser, error } = await supabase
+      .from('admin_users')
+      .select('*')
+      .eq('username', username)
+      .single();
+    
+    if (error || !adminUser) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    
+    // Compare password with stored hash
+    const isPasswordValid = await bcrypt.compare(password, adminUser.password_hash);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    
+    // Create JWT token
+    const token = jwt.sign(
+      { id: adminUser.id, username: adminUser.username, role: adminUser.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    // Set HTTP-only cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production', // Only send over HTTPS in production
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      sameSite: 'strict'
+    });
+    
+    // Return user info (excluding password hash)
+    res.json({
+      success: true,
+      user: {
+        id: adminUser.id,
+        username: adminUser.username,
+        role: adminUser.role,
+        name: adminUser.name
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Server error during login' });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('token');
+  res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// Check authentication status
+app.get('/api/auth/status', authenticateToken, (req, res) => {
+  res.json({
+    authenticated: true,
+    user: {
+      id: req.user.id,
+      username: req.user.username,
+      role: req.user.role
+    }
+  });
+});
+
+// Create admin user (for initial setup)
+app.post('/api/auth/setup', async (req, res) => {
+  try {
+    // Check if any admin users exist
+    const { data: existingAdmins, error: countError } = await supabase
+      .from('admin_users')
+      .select('id')
+      .limit(1);
+    
+    if (countError) throw countError;
+    
+    if (existingAdmins && existingAdmins.length > 0) {
+      return res.status(400).json({ error: 'Admin users already exist' });
+    }
+    
+    const { username, password, name = 'Administrator' } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    
+    // Hash password
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+    
+    // Create admin user
+    const { data: adminUser, error: insertError } = await supabase
+      .from('admin_users')
+      .insert({
+        username,
+        password_hash: passwordHash,
+        name,
+        role: 'admin',
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    
+    if (insertError) throw insertError;
+    
+    res.status(201).json({
+      success: true,
+      message: 'Admin user created successfully',
+      user: {
+        id: adminUser.id,
+        username: adminUser.username,
+        name: adminUser.name,
+        role: adminUser.role
+      }
+    });
+  } catch (error) {
+    console.error('Setup error:', error);
+    res.status(500).json({ error: 'Failed to create admin user' });
+  }
+});
+
 // --- API Routes ---
 
 // Get ALL sales data, including webinar leads and custom headers
-app.get('/api/sales', async (req, res) => {
+app.get('/api/sales', authenticateToken, async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
     const [
@@ -185,7 +340,7 @@ app.get('/api/sales', async (req, res) => {
 });
 
 // Save ALL sales data, including webinar leads and employee batches
-app.post('/api/sales', async (req, res) => {
+app.post('/api/sales', authenticateToken, async (req, res) => {
   try {
     const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches, batchToMonthMapping } = req.body;
     
@@ -364,7 +519,7 @@ app.post('/api/sales', async (req, res) => {
 });
 
 // Add new employee
-app.post('/api/employee', async (req, res) => {
+app.post('/api/employee', authenticateToken, async (req, res) => {
   try {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Employee name is required' });
