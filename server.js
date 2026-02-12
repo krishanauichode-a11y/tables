@@ -75,7 +75,11 @@ app.get('/api/sales', async (req, res) => {
       batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
       monthlyBatchAdmin: {},
       customHeaders: {
-        daily: [], summary: ["Team Member", "Fresher", "Offline", "Repeater", "Family", "TOTAL"], monthly: ["Team Member"], batch: ["Team Member"], batchTable: ["Team Member"]
+        daily: [], 
+        summary: ["Team Member", "Fresher", "Offer", "Repeater", "Family", "Attended", "Postponed", "TOTAL"], 
+        monthly: ["Team Member"], 
+        batch: ["Team Member"], 
+        batchTable: ["Team Member"]
       },
       webinarLeads: {},
       employeeBatches: {}, // Add employee batches to the response
@@ -122,7 +126,7 @@ app.get('/api/sales', async (req, res) => {
     employees.forEach(emp => {
       formattedData.leadSummary[emp.name] = {};
       for (let month = 0; month < 12; month++) {
-        formattedData.leadSummary[emp.name][month] = { pre: 0, off: 0, rep: 0, app: 0 };
+        formattedData.leadSummary[emp.name][month] = { pre: 0, off: 0, rep: 0, app: 0, att: 0 };
       }
       const empSummary = leadSummary.filter(s => s.employee_id === emp.id);
       empSummary.forEach(summary => {
@@ -130,7 +134,8 @@ app.get('/api/sales', async (req, res) => {
           pre: summary.fre || 0,
           off: summary.off || 0,
           rep: summary.rep || 0,
-          app: summary.fam || 0
+          app: summary.fam || 0,
+          att: summary.att || 0  // ADD ATTENDED FIELD
         };
       });
     });
@@ -251,7 +256,15 @@ app.post('/api/sales', async (req, res) => {
           const month = parseInt(monthKey, 10);
           if (isNaN(month)) continue;
           const summary = monthlySummary[monthKey];
-          leadSummaryToUpsert.push({ employee_id: empId, month: month, fre: summary.pre || 0, off: summary.off || 0, rep: summary.rep || 0, fam: summary.app || 0 });
+          leadSummaryToUpsert.push({ 
+            employee_id: empId, 
+            month: month, 
+            fre: summary.pre || 0, 
+            off: summary.off || 0, 
+            rep: summary.rep || 0, 
+            fam: summary.app || 0,
+            att: summary.att || 0  // ADD ATTENDED FIELD
+          });
         }
       }
     } 
