@@ -380,7 +380,7 @@ app.post('/api/employee', async (req, res) => {
   }
 });
 
-// Delete employee - NEW ENDPOINT
+// Delete employee - EMPLOYEE REMOVAL ENDPOINT
 app.delete('/api/employee/:name', async (req, res) => {
   try {
     const { name } = req.params;
@@ -405,14 +405,19 @@ app.delete('/api/employee/:name', async (req, res) => {
     
     const employeeId = employee.id;
     
-    // Delete all related data in a transaction-like manner
+    // Delete all related data in the correct order to maintain referential integrity
+    console.log(`>>> [DEBUG] Removing employee ${name} (ID: ${employeeId}) and all related data...`);
+    
     // 1. Delete daily bookings
     const { error: dailyError } = await supabase
       .from('daily_bookings')
       .delete()
       .eq('employee_id', employeeId);
     
-    if (dailyError) throw dailyError;
+    if (dailyError) {
+      console.error('Error deleting daily bookings:', dailyError);
+      throw dailyError;
+    }
     
     // 2. Delete lead summary
     const { error: summaryError } = await supabase
@@ -420,7 +425,10 @@ app.delete('/api/employee/:name', async (req, res) => {
       .delete()
       .eq('employee_id', employeeId);
     
-    if (summaryError) throw summaryError;
+    if (summaryError) {
+      console.error('Error deleting lead summary:', summaryError);
+      throw summaryError;
+    }
     
     // 3. Delete monthly leads
     const { error: monthlyError } = await supabase
@@ -428,7 +436,10 @@ app.delete('/api/employee/:name', async (req, res) => {
       .delete()
       .eq('employee_id', employeeId);
     
-    if (monthlyError) throw monthlyError;
+    if (monthlyError) {
+      console.error('Error deleting monthly leads:', monthlyError);
+      throw monthlyError;
+    }
     
     // 4. Delete batch leads
     const { error: batchLeadsError } = await supabase
@@ -436,7 +447,10 @@ app.delete('/api/employee/:name', async (req, res) => {
       .delete()
       .eq('employee_id', employeeId);
     
-    if (batchLeadsError) throw batchLeadsError;
+    if (batchLeadsError) {
+      console.error('Error deleting batch leads:', batchLeadsError);
+      throw batchLeadsError;
+    }
     
     // 5. Delete monthly batch admin leads
     const { error: batchAdminError } = await supabase
@@ -444,7 +458,10 @@ app.delete('/api/employee/:name', async (req, res) => {
       .delete()
       .eq('employee_id', employeeId);
     
-    if (batchAdminError) throw batchAdminError;
+    if (batchAdminError) {
+      console.error('Error deleting monthly batch admin leads:', batchAdminError);
+      throw batchAdminError;
+    }
     
     // 6. Delete employee batch assignments
     const { error: empBatchError } = await supabase
@@ -452,7 +469,10 @@ app.delete('/api/employee/:name', async (req, res) => {
       .delete()
       .eq('employee_id', employeeId);
     
-    if (empBatchError) throw empBatchError;
+    if (empBatchError) {
+      console.error('Error deleting employee batch assignments:', empBatchError);
+      throw empBatchError;
+    }
     
     // 7. Finally, delete the employee
     const { error: deleteError } = await supabase
@@ -460,10 +480,17 @@ app.delete('/api/employee/:name', async (req, res) => {
       .delete()
       .eq('id', employeeId);
     
-    if (deleteError) throw deleteError;
+    if (deleteError) {
+      console.error('Error deleting employee:', deleteError);
+      throw deleteError;
+    }
     
     console.log(`>>> [DEBUG] Employee ${name} and all related data deleted successfully.`);
-    res.json({ success: true, message: `Employee ${name} removed successfully` });
+    res.json({ 
+      success: true, 
+      message: `Employee ${name} removed successfully`,
+      employeeName: name
+    });
     
   } catch (error) {
     console.error('!!! [DEBUG] ERROR IN DELETE EMPLOYEE ROUTE !!!', error);
