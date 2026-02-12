@@ -380,9 +380,101 @@ app.post('/api/employee', async (req, res) => {
   }
 });
 
+// Delete employee - NEW ENDPOINT
+app.delete('/api/employee/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Employee name is required' });
+    }
+    
+    // First, get the employee ID
+    const { data: employee, error: fetchError } = await supabase
+      .from('employees')
+      .select('id')
+      .eq('name', name)
+      .single();
+    
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return res.status(404).json({ error: 'Employee not found' });
+      }
+      throw fetchError;
+    }
+    
+    const employeeId = employee.id;
+    
+    // Delete all related data in a transaction-like manner
+    // 1. Delete daily bookings
+    const { error: dailyError } = await supabase
+      .from('daily_bookings')
+      .delete()
+      .eq('employee_id', employeeId);
+    
+    if (dailyError) throw dailyError;
+    
+    // 2. Delete lead summary
+    const { error: summaryError } = await supabase
+      .from('lead_summary')
+      .delete()
+      .eq('employee_id', employeeId);
+    
+    if (summaryError) throw summaryError;
+    
+    // 3. Delete monthly leads
+    const { error: monthlyError } = await supabase
+      .from('monthly_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+    
+    if (monthlyError) throw monthlyError;
+    
+    // 4. Delete batch leads
+    const { error: batchLeadsError } = await supabase
+      .from('batch_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+    
+    if (batchLeadsError) throw batchLeadsError;
+    
+    // 5. Delete monthly batch admin leads
+    const { error: batchAdminError } = await supabase
+      .from('monthly_batch_admin_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+    
+    if (batchAdminError) throw batchAdminError;
+    
+    // 6. Delete employee batch assignments
+    const { error: empBatchError } = await supabase
+      .from('employee_batches')
+      .delete()
+      .eq('employee_id', employeeId);
+    
+    if (empBatchError) throw empBatchError;
+    
+    // 7. Finally, delete the employee
+    const { error: deleteError } = await supabase
+      .from('employees')
+      .delete()
+      .eq('id', employeeId);
+    
+    if (deleteError) throw deleteError;
+    
+    console.log(`>>> [DEBUG] Employee ${name} and all related data deleted successfully.`);
+    res.json({ success: true, message: `Employee ${name} removed successfully` });
+    
+  } catch (error) {
+    console.error('!!! [DEBUG] ERROR IN DELETE EMPLOYEE ROUTE !!!', error);
+    res.status(500).json({ 
+      error: 'Failed to remove employee', 
+      details: error.message 
+    });
+  }
+});
+
 // Start Server
 app.listen(port, () => { 
   console.log(`Server is running on http://localhost:${port}`); 
 });
-
-
