@@ -38,7 +38,7 @@ app.get('/api/sales', async (req, res) => {
       { data: webinarLeads, error: webinarError },
       { data: employeeBatches, error: empBatchesError }, // Fetch employee batches
       { data: batchMonthMapping, error: batchMappingError }, // Fetch batch-month mappings
-      { data: webinarData, error: webinarDataError } // NEW: Fetch webinar batch data
+      { data: webinarData, error: webinarDataError } // Fetch webinar batch data
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -51,7 +51,7 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('webinar_leads').select('*'),
       supabase.from('employee_batches').select('*'), // Existing table
       supabase.from('batch_month_mapping').select('*').order('batch_index'), // Fetch batch-month mappings
-      supabase.from('webinar_data').select('*') // NEW: Fetch webinar batch data
+      supabase.from('webinar_data').select('*') // Fetch webinar batch data
     ]);
 
     // Check for all errors
@@ -80,7 +80,7 @@ app.get('/api/sales', async (req, res) => {
       webinarLeads: {},
       employeeBatches: {}, // Add employee batches to the response
       batchToMonthMapping: [], // Add batch-to-month mappings
-      webinarData: { batches: {}, currentYear: "2025" } // NEW: Add webinar batch data
+      webinarData: {} // UPDATED: Year-based structure for webinar batch data
     };
 
     // Process batch-to-month mappings
@@ -180,17 +180,20 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
-    // Process webinar batch data - NEW
+    // UPDATED: Process webinar batch data with year-based structure
+    formattedData.webinarData = {};
     if (webinarData && webinarData.length > 0) {
-      formattedData.webinarData.batches = {};
       webinarData.forEach(item => {
-        formattedData.webinarData.batches[item.batch_name] = item.lead_count;
+        const year = item.year || "2025"; // Default to 2025 if not specified
+        
+        // Initialize year object if it doesn't exist
+        if (!formattedData.webinarData[year]) {
+          formattedData.webinarData[year] = {};
+        }
+        
+        // Add batch data for this year
+        formattedData.webinarData[year][item.batch_name] = item.lead_count;
       });
-      
-      // Get the current year from the first item or use default
-      if (webinarData.length > 0) {
-        formattedData.webinarData.currentYear = webinarData[0].current_year || "2025";
-      }
     }
 
     console.log(">>> [DEBUG] Data formatted. Sending response.");
@@ -371,7 +374,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // --- Save Webinar Batch Data --- NEW
+    // UPDATED: Save Webinar Batch Data with year-based structure
     if (webinarData) {
       // Clear existing webinar batch data
       const { error: deleteError } = await supabase.from('webinar_data').delete().neq('id', 0);
@@ -379,12 +382,14 @@ app.post('/api/sales', async (req, res) => {
       
       // Insert new webinar batch data
       const webinarDataToInsert = [];
-      for (const batchName in webinarData.batches) {
-        webinarDataToInsert.push({
-          batch_name: batchName,
-          lead_count: webinarData.batches[batchName],
-          current_year: webinarData.currentYear || "2025"
-        });
+      for (const year in webinarData) {
+        for (const batchName in webinarData[year]) {
+          webinarDataToInsert.push({
+            year: year,
+            batch_name: batchName,
+            lead_count: webinarData[year][batchName]
+          });
+        }
       }
       
       if (webinarDataToInsert.length > 0) {
