@@ -1,5 +1,3 @@
-// server.js
-
 // --- Dependencies ---
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
@@ -434,6 +432,97 @@ app.post('/api/employee', async (req, res) => {
   } catch (error) { 
     console.error('Error adding employee:', error); 
     res.status(500).json({ error: 'Failed to add employee', details: error.message }); 
+  }
+});
+
+// Remove employee and all associated data
+app.delete('/api/employee/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Employee name is required' });
+    }
+    
+    // First, get the employee ID
+    const { data: employee, error: empError } = await supabase
+      .from('employees')
+      .select('id')
+      .eq('name', name)
+      .single();
+      
+    if (empError || !employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+    
+    const employeeId = employee.id;
+    
+    // Delete all related data in the correct order to respect foreign key constraints
+    
+    // 1. Delete employee batches
+    const { error: batchAssignError } = await supabase
+      .from('employee_batches')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (batchAssignError) throw batchAssignError;
+    
+    // 2. Delete daily bookings
+    const { error: dailyError } = await supabase
+      .from('daily_bookings')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (dailyError) throw dailyError;
+    
+    // 3. Delete lead summary
+    const { error: summaryError } = await supabase
+      .from('lead_summary')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (summaryError) throw summaryError;
+    
+    // 4. Delete monthly leads
+    const { error: monthlyError } = await supabase
+      .from('monthly_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (monthlyError) throw monthlyError;
+    
+    // 5. Delete batch leads
+    const { error: batchLeadsError } = await supabase
+      .from('batch_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (batchLeadsError) throw batchLeadsError;
+    
+    // 6. Delete monthly batch admin leads
+    const { error: batchAdminError } = await supabase
+      .from('monthly_batch_admin_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (batchAdminError) throw batchAdminError;
+    
+    // 7. Finally, delete the employee
+    const { error: deleteError } = await supabase
+      .from('employees')
+      .delete()
+      .eq('id', employeeId);
+      
+    if (deleteError) throw deleteError;
+    
+    res.json({ success: true, message: `Employee "${name}" and all associated data have been removed` });
+    
+  } catch (error) {
+    console.error('Error removing employee:', error);
+    res.status(500).json({ 
+      error: 'Failed to remove employee', 
+      details: error.message 
+    });
   }
 });
 
