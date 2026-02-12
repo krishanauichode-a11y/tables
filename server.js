@@ -37,7 +37,8 @@ app.get('/api/sales', async (req, res) => {
       { data: customHeaders, error: headersError },
       { data: webinarLeads, error: webinarError },
       { data: employeeBatches, error: empBatchesError }, // Fetch employee batches
-      { data: batchMonthMapping, error: batchMappingError } // NEW: Fetch batch-month mappings
+      { data: batchMonthMapping, error: batchMappingError }, // Fetch batch-month mappings
+      { data: webinarData, error: webinarDataError } // NEW: Fetch webinar batch data
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -49,7 +50,8 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('custom_headers').select('*'),
       supabase.from('webinar_leads').select('*'),
       supabase.from('employee_batches').select('*'), // Existing table
-      supabase.from('batch_month_mapping').select('*').order('batch_index') // NEW: Fetch batch-month mappings
+      supabase.from('batch_month_mapping').select('*').order('batch_index'), // Fetch batch-month mappings
+      supabase.from('webinar_data').select('*') // NEW: Fetch webinar batch data
     ]);
 
     // Check for all errors
@@ -61,6 +63,7 @@ app.get('/api/sales', async (req, res) => {
     if (webinarError) throw webinarError;
     if (empBatchesError) throw empBatchesError;
     if (batchMappingError) throw batchMappingError;
+    if (webinarDataError) throw webinarDataError;
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
@@ -76,7 +79,8 @@ app.get('/api/sales', async (req, res) => {
       },
       webinarLeads: {},
       employeeBatches: {}, // Add employee batches to the response
-      batchToMonthMapping: [] // NEW: Add batch-to-month mappings
+      batchToMonthMapping: [], // Add batch-to-month mappings
+      webinarData: { batches: {}, currentYear: "2025" } // NEW: Add webinar batch data
     };
 
     // Process batch-to-month mappings
@@ -164,7 +168,7 @@ app.get('/api/sales', async (req, res) => {
       }
     });
     
-    // Process webinar leads - UPDATED to structure by year
+    // Process webinar leads - structure by year
     formattedData.webinarLeads = {};
     if (webinarLeads && webinarLeads.length > 0) {
       webinarLeads.forEach(item => {
@@ -174,6 +178,19 @@ app.get('/api/sales', async (req, res) => {
         }
         formattedData.webinarLeads[year][item.month] = item.lead_count;
       });
+    }
+
+    // Process webinar batch data - NEW
+    if (webinarData && webinarData.length > 0) {
+      formattedData.webinarData.batches = {};
+      webinarData.forEach(item => {
+        formattedData.webinarData.batches[item.batch_name] = item.lead_count;
+      });
+      
+      // Get the current year from the first item or use default
+      if (webinarData.length > 0) {
+        formattedData.webinarData.currentYear = webinarData[0].current_year || "2025";
+      }
     }
 
     console.log(">>> [DEBUG] Data formatted. Sending response.");
@@ -187,7 +204,7 @@ app.get('/api/sales', async (req, res) => {
 // Save ALL sales data, including webinar leads and employee batches
 app.post('/api/sales', async (req, res) => {
   try {
-    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches, batchToMonthMapping } = req.body;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches, batchToMonthMapping, webinarData } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
 
@@ -298,7 +315,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- Save Webinar Leads --- UPDATED for year-based structure
+    // --- Save Webinar Leads --- for year-based structure
     if (webinarLeads) {
       const webinarLeadsToUpsert = [];
       for (const year in webinarLeads) {
@@ -320,7 +337,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // --- Save Employee Batches --- EXISTING
+    // --- Save Employee Batches ---
     if (employeeBatches) {
         await supabase.from('employee_batches').delete().neq('id', 0); // Clear existing
         const batchAssignments = [];
@@ -334,7 +351,7 @@ app.post('/api/sales', async (req, res) => {
         }
     }
     
-    // --- Save Batch-Month Mappings --- NEW
+    // --- Save Batch-Month Mappings ---
     if (batchToMonthMapping) {
       // Clear existing mappings
       const { error: deleteError } = await supabase.from('batch_month_mapping').delete().neq('id', 0);
@@ -350,6 +367,28 @@ app.post('/api/sales', async (req, res) => {
       
       if (mappingsToInsert.length > 0) {
         const { error: insertError } = await supabase.from('batch_month_mapping').insert(mappingsToInsert);
+        if (insertError) throw insertError;
+      }
+    }
+    
+    // --- Save Webinar Batch Data --- NEW
+    if (webinarData) {
+      // Clear existing webinar batch data
+      const { error: deleteError } = await supabase.from('webinar_data').delete().neq('id', 0);
+      if (deleteError) throw deleteError;
+      
+      // Insert new webinar batch data
+      const webinarDataToInsert = [];
+      for (const batchName in webinarData.batches) {
+        webinarDataToInsert.push({
+          batch_name: batchName,
+          lead_count: webinarData.batches[batchName],
+          current_year: webinarData.currentYear || "2025"
+        });
+      }
+      
+      if (webinarDataToInsert.length > 0) {
+        const { error: insertError } = await supabase.from('webinar_data').insert(webinarDataToInsert);
         if (insertError) throw insertError;
       }
     }
@@ -384,4 +423,3 @@ app.post('/api/employee', async (req, res) => {
 app.listen(port, () => { 
   console.log(`Server is running on http://localhost:${port}`); 
 });
-
