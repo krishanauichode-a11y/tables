@@ -34,9 +34,9 @@ app.get('/api/sales', async (req, res) => {
       { data: monthlyBatchAdmin, error: batchAdminError },
       { data: customHeaders, error: headersError },
       { data: webinarLeads, error: webinarError },
-      { data: employeeBatches, error: empBatchesError },
-      { data: batchMonthMapping, error: batchMappingError },
-      { data: webinarData, error: webinarDataError }
+      { data: employeeBatches, error: empBatchesError }, // Fetch employee batches
+      { data: batchMonthMapping, error: batchMappingError }, // Fetch batch-month mappings
+      { data: webinarData, error: webinarDataError } // Fetch webinar batch data
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -47,9 +47,9 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('monthly_batch_admin_leads').select('*'),
       supabase.from('custom_headers').select('*'),
       supabase.from('webinar_leads').select('*'),
-      supabase.from('employee_batches').select('*'),
-      supabase.from('batch_month_mapping').select('*').order('batch_index'),
-      supabase.from('webinar_data').select('*')
+      supabase.from('employee_batches').select('*'), // Existing table
+      supabase.from('batch_month_mapping').select('*').order('batch_index'), // Fetch batch-month mappings
+      supabase.from('webinar_data').select('*') // Fetch webinar batch data
     ]);
 
     // Check for all errors
@@ -68,10 +68,8 @@ app.get('/api/sales', async (req, res) => {
     const formattedData = {
       employees: employees.map(e => e.name),
       dailyBookings: {}, 
-      dailyBookingsByYear: {}, // NEW: Year-wise daily bookings
       leadSummary: {},
       monthlyLeads: {},
-      monthlyLeadsByYear: {}, // NEW: Year-wise monthly leads
       batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
       monthlyBatchAdmin: {},
       customHeaders: {
@@ -82,26 +80,25 @@ app.get('/api/sales', async (req, res) => {
         batchTable: ["Team Member"]
       },
       webinarLeads: {},
-      employeeBatches: {},
-      batchToMonthMapping: [],
-      webinarData: {}
+      employeeBatches: {}, // Add employee batches to the response
+      batchToMonthMapping: [], // Add batch-to-month mappings
+      webinarData: {} // UPDATED: Year-based structure for webinar batch data
     };
 
-    // Process batch-to-month mappings with year
+    // Process batch-to-month mappings
     if (batchMonthMapping && batchMonthMapping.length > 0) {
       formattedData.batchToMonthMapping = batchMonthMapping.map(mapping => ({
         batchIndex: mapping.batch_index,
         batchName: mapping.batch_name,
         monthIndex: mapping.month_index,
-        monthName: mapping.month_name,
-        year: mapping.year || "2026" // Default to 2026 if not specified
+        monthName: mapping.month_name
       }));
     }
 
     // Process employee batches
     employees.forEach(emp => {
-      const batchAssignment = employeeBatches.find(b => b.employee_id === emp.id);
-      formattedData.employeeBatches[emp.name] = batchAssignment ? batchAssignment.batch_id : null;
+        const batchAssignment = employeeBatches.find(b => b.employee_id === emp.id);
+        formattedData.employeeBatches[emp.name] = batchAssignment ? batchAssignment.batch_id : null;
     });
 
     // Process custom headers
@@ -113,33 +110,17 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
-    // Process daily bookings - NEW: Year-wise structure
+    // Process daily bookings
     employees.forEach(emp => {
       formattedData.dailyBookings[emp.name] = {};
-      formattedData.dailyBookingsByYear[emp.name] = {};
-      
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
       empDailyBookings.forEach(booking => {
-        const year = booking.year || "2026"; // Default year if not specified
-        
-        // Legacy structure (for backward compatibility)
-        if (!formattedData.dailyBookings[emp.name][booking.month]) {
-          formattedData.dailyBookings[emp.name][booking.month] = {};
-        }
+        if (!formattedData.dailyBookings[emp.name][booking.month]) formattedData.dailyBookings[emp.name][booking.month] = {};
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
-        
-        // NEW: Year-wise structure
-        if (!formattedData.dailyBookingsByYear[emp.name][year]) {
-          formattedData.dailyBookingsByYear[emp.name][year] = {};
-        }
-        if (!formattedData.dailyBookingsByYear[emp.name][year][booking.month]) {
-          formattedData.dailyBookingsByYear[emp.name][year][booking.month] = {};
-        }
-        formattedData.dailyBookingsByYear[emp.name][year][booking.month][booking.day] = booking.value;
       });
     });
     
-    // Process lead summary - month-wise
+    // Process lead summary - now month-wise
     employees.forEach(emp => {
       formattedData.leadSummary[emp.name] = {};
       for (let month = 0; month < 12; month++) {
@@ -152,42 +133,25 @@ app.get('/api/sales', async (req, res) => {
           off: summary.off || 0,
           rep: summary.rep || 0,
           app: summary.fam || 0,
-          att: summary.att || 0
+          att: summary.att || 0  // ADD ATTENDED FIELD
         };
       });
     });
     
-    // Process monthly leads - NEW: Year-wise structure
+    // Process monthly leads - already month-wise
     employees.forEach(emp => {
       const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
-      
-      // Legacy structure
       formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
-      
-      // NEW: Year-wise structure
-      formattedData.monthlyLeadsByYear[emp.name] = {};
-      
-      empMonthly.forEach(month => {
-        const year = month.year || "2026"; // Default year if not specified
-        
-        // Legacy structure
-        formattedData.monthlyLeads[emp.name][month.month] = month.value;
-        
-        // NEW: Year-wise structure
-        if (!formattedData.monthlyLeadsByYear[emp.name][year]) {
-          formattedData.monthlyLeadsByYear[emp.name][year] = Array(12).fill(0);
-        }
-        formattedData.monthlyLeadsByYear[emp.name][year][month.month] = month.value;
-      });
+      empMonthly.forEach(month => formattedData.monthlyLeads[emp.name][month.month] = month.value);
     });
     
     // Process batch data
     employees.forEach(emp => {
-      formattedData.batchData.batchLeads[emp.name] = {};
-      batches.forEach(batch => {
-        const batchLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === batch.id);
-        formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
-      });
+        formattedData.batchData.batchLeads[emp.name] = {};
+        batches.forEach(batch => {
+            const batchLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === batch.id);
+            formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
+        });
     });
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
     
@@ -211,7 +175,7 @@ app.get('/api/sales', async (req, res) => {
     formattedData.webinarLeads = {};
     if (webinarLeads && webinarLeads.length > 0) {
       webinarLeads.forEach(item => {
-        const year = item.year || "2026";
+        const year = item.year; // Assumes 'year' column exists in DB
         if (!formattedData.webinarLeads[year]) {
           formattedData.webinarLeads[year] = {};
         }
@@ -219,16 +183,18 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
-    // Process webinar batch data with year-based structure
+    // UPDATED: Process webinar batch data with year-based structure
     formattedData.webinarData = {};
     if (webinarData && webinarData.length > 0) {
       webinarData.forEach(item => {
-        const year = item.year || "2026";
+        const year = item.year || "2025"; // Default to 2025 if not specified
         
+        // Initialize year object if it doesn't exist
         if (!formattedData.webinarData[year]) {
           formattedData.webinarData[year] = {};
         }
         
+        // Add batch data for this year
         formattedData.webinarData[year][item.batch_name] = item.lead_count;
       });
     }
@@ -244,21 +210,7 @@ app.get('/api/sales', async (req, res) => {
 // Save ALL sales data, including webinar leads and employee batches
 app.post('/api/sales', async (req, res) => {
   try {
-    const { 
-      employees, 
-      dailyBookings, 
-      dailyBookingsByYear, // NEW: Year-wise daily bookings
-      leadSummary, 
-      monthlyLeads, 
-      monthlyLeadsByYear, // NEW: Year-wise monthly leads
-      batchData, 
-      monthlyBatchAdmin, 
-      customHeaders, 
-      webinarLeads, 
-      employeeBatches, 
-      batchToMonthMapping, 
-      webinarData 
-    } = req.body;
+    const { employees, dailyBookings, leadSummary, monthlyLeads, batchData, monthlyBatchAdmin, customHeaders, webinarLeads, employeeBatches, batchToMonthMapping, webinarData } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
 
@@ -266,9 +218,8 @@ app.post('/api/sales', async (req, res) => {
     for (const empName of employees) {
       const { data: existingEmp, error: empError } = await supabase.from('employees').select('id').eq('name', empName).single();
       if (empError && empError.code !== 'PGRST116') throw empError;
-      if (existingEmp) { 
-        empIdMap[empName] = existingEmp.id; 
-      } else {
+      if (existingEmp) { empIdMap[empName] = existingEmp.id; }
+      else {
         const { data: newEmp, error: insertError } = await supabase.from('employees').insert({ name: empName }).select('id').single();
         if (insertError) throw insertError;
         empIdMap[empName] = newEmp.id;
@@ -276,68 +227,27 @@ app.post('/api/sales', async (req, res) => {
     }
     
     const upsertData = async (table, data, conflictColumns) => { 
-      if (data.length === 0) return;
-      const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
-      if (error) throw error; 
+        if (data.length === 0) return;
+        const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
+        if (error) throw error; 
     };
 
     // --- Save Daily Bookings ---
     const dailyBookingsToUpsert = [];
-    
-    // Process legacy daily bookings
-    if (dailyBookings) {
-      for (const empName in dailyBookings) { 
-        const empId = empIdMap[empName]; 
-        if (!empId) continue; 
-        for (const month in dailyBookings[empName]) { 
-          for (const day in dailyBookings[empName][month]) { 
-            dailyBookingsToUpsert.push({ 
-              employee_id: empId, 
-              month: parseInt(month), 
-              day: parseInt(day), 
-              value: dailyBookings[empName][month][day],
-              year: "2026" // Default year for legacy data
-            }); 
-          } 
+    for (const empName in dailyBookings) { 
+      const empId = empIdMap[empName]; if (!empId) continue; 
+      for (const month in dailyBookings[empName]) { 
+        for (const day in dailyBookings[empName][month]) { 
+          dailyBookingsToUpsert.push({ employee_id: empId, month: parseInt(month), day: parseInt(day), value: dailyBookings[empName][month][day] }); 
         } 
-      }
-    }
-    
-    // NEW: Process year-wise daily bookings
-    if (dailyBookingsByYear) {
-      for (const empName in dailyBookingsByYear) {
-        const empId = empIdMap[empName];
-        if (!empId) continue;
-        
-        for (const year in dailyBookingsByYear[empName]) {
-          for (const month in dailyBookingsByYear[empName][year]) {
-            for (const day in dailyBookingsByYear[empName][year][month]) {
-              dailyBookingsToUpsert.push({
-                employee_id: empId,
-                month: parseInt(month),
-                day: parseInt(day),
-                value: dailyBookingsByYear[empName][year][month][day],
-                year: year
-              });
-            }
-          }
-        }
-      }
-    }
-    
-    // Delete existing daily bookings for all employees and re-insert
-    const employeeIds = Object.values(empIdMap);
-    await supabase.from('daily_bookings').delete().in('employee_id', employeeIds);
-    
-    if (dailyBookingsToUpsert.length > 0) {
-      await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day, year');
-    }
+      } 
+    } 
+    await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day');
     
     // --- Save Lead Summary (Month-wise) ---
     const leadSummaryToUpsert = []; 
     for (const empName in leadSummary) { 
-      const empId = empIdMap[empName]; 
-      if (!empId) continue;
+      const empId = empIdMap[empName]; if (!empId) continue;
       const monthlySummary = leadSummary[empName];
       if (typeof monthlySummary === 'object' && monthlySummary !== null) {
         for (const monthKey in monthlySummary) {
@@ -351,7 +261,7 @@ app.post('/api/sales', async (req, res) => {
             off: summary.off || 0, 
             rep: summary.rep || 0, 
             fam: summary.app || 0,
-            att: summary.att || 0
+            att: summary.att || 0  // ADD ATTENDED FIELD
           });
         }
       }
@@ -359,72 +269,28 @@ app.post('/api/sales', async (req, res) => {
     await upsertData('lead_summary', leadSummaryToUpsert, 'employee_id, month');
 
     // --- Save Monthly Leads ---
-    const monthlyLeadsToUpsert = [];
-    
-    // Process legacy monthly leads
-    if (monthlyLeads) {
-      for (const empName in monthlyLeads) { 
-        const empId = empIdMap[empName]; 
-        if (!empId) continue; 
-        for (let month = 0; month < 12; month++) { 
-          monthlyLeadsToUpsert.push({ 
-            employee_id: empId, 
-            month: month, 
-            value: monthlyLeads[empName][month] || 0,
-            year: "2026" // Default year for legacy data
-          }); 
-        } 
-      }
-    }
-    
-    // NEW: Process year-wise monthly leads
-    if (monthlyLeadsByYear) {
-      for (const empName in monthlyLeadsByYear) {
-        const empId = empIdMap[empName];
-        if (!empId) continue;
-        
-        for (const year in monthlyLeadsByYear[empName]) {
-          for (let month = 0; month < 12; month++) {
-            monthlyLeadsToUpsert.push({
-              employee_id: empId,
-              month: month,
-              value: monthlyLeadsByYear[empName][year][month] || 0,
-              year: year
-            });
-          }
-        }
-      }
-    }
-    
-    // Delete existing monthly leads for all employees and re-insert
-    await supabase.from('monthly_leads').delete().in('employee_id', employeeIds);
-    
-    if (monthlyLeadsToUpsert.length > 0) {
-      await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month, year');
-    }
+    const monthlyLeadsToUpsert = []; 
+    for (const empName in monthlyLeads) { 
+      const empId = empIdMap[empName]; if (!empId) continue; 
+      for (let month = 0; month < 12; month++) { 
+        monthlyLeadsToUpsert.push({ employee_id: empId, month: month, value: monthlyLeads[empName][month] || 0 }); 
+      } 
+    } 
+    await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month');
 
     // --- Save Batch Data ---
     if (batchData) {
-      const batchesToUpsert = batchData.batches.map(batch => ({ 
-        id: batch.id, 
-        label: batch.label, 
-        thc: batchData.thc[batch.id] || 0 
-      })); 
-      await upsertData('batches', batchesToUpsert, 'id'); 
-      
-      const batchLeadsToUpsert = []; 
-      for (const empName in batchData.batchLeads) { 
-        const empId = empIdMap[empName]; 
-        if (!empId) continue; 
-        for (const batchId in batchData.batchLeads[empName]) { 
-          batchLeadsToUpsert.push({ 
-            employee_id: empId, 
-            batch_id: batchId, 
-            value: batchData.batchLeads[empName][batchId] || 0 
-          });
+        const batchesToUpsert = batchData.batches.map(batch => ({ id: batch.id, label: batch.label, thc: batchData.thc[batch.id] || 0 })); 
+        await upsertData('batches', batchesToUpsert, 'id'); 
+        
+        const batchLeadsToUpsert = []; 
+        for (const empName in batchData.batchLeads) { 
+          const empId = empIdMap[empName]; if (!empId) continue; 
+          for (const batchId in batchData.batchLeads[empName]) { 
+            batchLeadsToUpsert.push({ employee_id: empId, batch_id: batchId, value: batchData.batchLeads[empName][batchId] || 0 });
+          } 
         } 
-      } 
-      await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
+        await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
     }
 
     // --- Save Custom Headers ---
@@ -443,29 +309,18 @@ app.post('/api/sales', async (req, res) => {
 
     // --- Save Monthly Batch Admin ---
     if (monthlyBatchAdmin && Object.keys(monthlyBatchAdmin).length > 0) {
+      const employeeIds = Object.values(empIdMap);
       await supabase.from('monthly_batch_admin_leads').delete().in('employee_id', employeeIds);
       const adminDataToInsert = [];
       for (const empName in monthlyBatchAdmin) {
-        const empId = empIdMap[empName]; 
-        if (!empId) continue;
+        const empId = empIdMap[empName]; if (!empId) continue;
         const leads = monthlyBatchAdmin[empName];
         adminDataToInsert.push({
-          employee_id: empId, 
-          lead_10_jul: leads[0] || 0, 
-          lead_29_jul: leads[1] || 0, 
-          lead_jul: leads[2] || 0,
-          lead_19_aug: leads[3] || 0, 
-          lead_aug: leads[4] || 0, 
-          lead_16_sep: leads[5] || 0,
-          lead_sep: leads[6] || 0, 
-          lead_13_oct: leads[7] || 0, 
-          lead_oct: leads[8] || 0,
-          lead_nov: leads[9] || 0, 
-          lead_dec: leads[10] || 0, 
-          lead_jan: leads[11] || 0,
-          lead_10_nov: leads[12] || 0, 
-          lead_20_nov: leads[13] || 0, 
-          lead_14_dec: leads[14] || 0
+          employee_id: empId, lead_10_jul: leads[0] || 0, lead_29_jul: leads[1] || 0, lead_jul: leads[2] || 0,
+          lead_19_aug: leads[3] || 0, lead_aug: leads[4] || 0, lead_16_sep: leads[5] || 0,
+          lead_sep: leads[6] || 0, lead_13_oct: leads[7] || 0, lead_oct: leads[8] || 0,
+          lead_nov: leads[9] || 0, lead_dec: leads[10] || 0, lead_jan: leads[11] || 0,
+          lead_10_nov: leads[12] || 0, lead_20_nov: leads[13] || 0, lead_14_dec: leads[14] || 0
         });
       }
       if (adminDataToInsert.length > 0) {
@@ -479,11 +334,7 @@ app.post('/api/sales', async (req, res) => {
       const webinarLeadsToUpsert = [];
       for (const year in webinarLeads) {
         for (const month in webinarLeads[year]) {
-          webinarLeadsToUpsert.push({ 
-            year: year, 
-            month: month, 
-            lead_count: webinarLeads[year][month] 
-          });
+          webinarLeadsToUpsert.push({ year: year, month: month, lead_count: webinarLeads[year][month] });
         }
       }
       
@@ -502,33 +353,30 @@ app.post('/api/sales', async (req, res) => {
     
     // --- Save Employee Batches ---
     if (employeeBatches) {
-      await supabase.from('employee_batches').delete().neq('id', 0);
-      const batchAssignments = [];
-      for (const empName in employeeBatches) {
-        const empId = empIdMap[empName]; 
-        if (!empId || !employeeBatches[empName]) continue;
-        batchAssignments.push({ 
-          employee_id: empId, 
-          batch_id: employeeBatches[empName] 
-        });
-      }
-      if (batchAssignments.length > 0) {
-        const { error: insertError } = await supabase.from('employee_batches').insert(batchAssignments);
-        if (insertError) throw insertError;
-      }
+        await supabase.from('employee_batches').delete().neq('id', 0); // Clear existing
+        const batchAssignments = [];
+        for (const empName in employeeBatches) {
+            const empId = empIdMap[empName]; if (!empId || !employeeBatches[empName]) continue;
+            batchAssignments.push({ employee_id: empId, batch_id: employeeBatches[empName] });
+        }
+        if (batchAssignments.length > 0) {
+            const { error: insertError } = await supabase.from('employee_batches').insert(batchAssignments);
+            if (insertError) throw insertError;
+        }
     }
     
     // --- Save Batch-Month Mappings ---
     if (batchToMonthMapping) {
+      // Clear existing mappings
       const { error: deleteError } = await supabase.from('batch_month_mapping').delete().neq('id', 0);
       if (deleteError) throw deleteError;
       
+      // Insert new mappings
       const mappingsToInsert = batchToMonthMapping.map(mapping => ({
         batch_index: mapping.batchIndex,
         batch_name: mapping.batchName,
         month_index: mapping.monthIndex,
-        month_name: mapping.monthName,
-        year: mapping.year || "2026" // Include year in mapping
+        month_name: mapping.monthName
       }));
       
       if (mappingsToInsert.length > 0) {
@@ -537,11 +385,13 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // --- Save Webinar Batch Data with year-based structure ---
+    // UPDATED: Save Webinar Batch Data with year-based structure
     if (webinarData) {
+      // Clear existing webinar batch data
       const { error: deleteError } = await supabase.from('webinar_data').delete().neq('id', 0);
       if (deleteError) throw deleteError;
       
+      // Insert new webinar batch data
       const webinarDataToInsert = [];
       for (const year in webinarData) {
         for (const batchName in webinarData[year]) {
@@ -608,22 +458,56 @@ app.delete('/api/employee/:name', async (req, res) => {
     const employeeId = employee.id;
     
     // Delete all related data in the correct order to respect foreign key constraints
-    const deleteOperations = [
-      supabase.from('employee_batches').delete().eq('employee_id', employeeId),
-      supabase.from('daily_bookings').delete().eq('employee_id', employeeId),
-      supabase.from('lead_summary').delete().eq('employee_id', employeeId),
-      supabase.from('monthly_leads').delete().eq('employee_id', employeeId),
-      supabase.from('batch_leads').delete().eq('employee_id', employeeId),
-      supabase.from('monthly_batch_admin_leads').delete().eq('employee_id', employeeId)
-    ];
     
-    // Execute all delete operations
-    for (const operation of deleteOperations) {
-      const { error } = await operation;
-      if (error) throw error;
-    }
+    // 1. Delete employee batches
+    const { error: batchAssignError } = await supabase
+      .from('employee_batches')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (batchAssignError) throw batchAssignError;
     
-    // Finally, delete the employee
+    // 2. Delete daily bookings
+    const { error: dailyError } = await supabase
+      .from('daily_bookings')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (dailyError) throw dailyError;
+    
+    // 3. Delete lead summary
+    const { error: summaryError } = await supabase
+      .from('lead_summary')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (summaryError) throw summaryError;
+    
+    // 4. Delete monthly leads
+    const { error: monthlyError } = await supabase
+      .from('monthly_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (monthlyError) throw monthlyError;
+    
+    // 5. Delete batch leads
+    const { error: batchLeadsError } = await supabase
+      .from('batch_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (batchLeadsError) throw batchLeadsError;
+    
+    // 6. Delete monthly batch admin leads
+    const { error: batchAdminError } = await supabase
+      .from('monthly_batch_admin_leads')
+      .delete()
+      .eq('employee_id', employeeId);
+      
+    if (batchAdminError) throw batchAdminError;
+    
+    // 7. Finally, delete the employee
     const { error: deleteError } = await supabase
       .from('employees')
       .delete()
@@ -646,3 +530,4 @@ app.delete('/api/employee/:name', async (req, res) => {
 app.listen(port, () => { 
   console.log(`Server is running on http://localhost:${port}`); 
 });
+
