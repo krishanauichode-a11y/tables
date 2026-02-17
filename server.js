@@ -76,7 +76,8 @@ app.get('/api/sales', async (req, res) => {
       monthlyBatchAdmin: {},
       customHeaders: {
         daily: [], 
-        summary: ["Team Member", "Fresher", "Offer", "Repeater", "Family", "Attended", "Postponed", "TOTAL"], 
+        // UPDATED: Added Basic and Advance columns to summary headers
+        summary: ["Team Member", "Fresher", "Offer", "Repeater", "Family", "Basic", "Advance", "TOTAL", "Attended", "Postponed"], 
         monthly: ["Team Member"], 
         batch: ["Team Member"], 
         batchTable: ["Team Member"]
@@ -143,15 +144,19 @@ app.get('/api/sales', async (req, res) => {
     employees.forEach(emp => {
       formattedData.leadSummary[emp.name] = {};
       for (let month = 0; month < 12; month++) {
-        formattedData.leadSummary[emp.name][month] = { pre: 0, off: 0, rep: 0, app: 0, att: 0 };
+        // UPDATED: Include bas and adv in the default structure
+        formattedData.leadSummary[emp.name][month] = { pre: 0, off: 0, rep: 0, app: 0, bas: 0, adv: 0, att: 0 };
       }
       const empSummary = leadSummary.filter(s => s.employee_id === emp.id);
       empSummary.forEach(summary => {
+        // UPDATED: Include bas and adv in the data structure
         formattedData.leadSummary[emp.name][summary.month] = {
           pre: summary.fre || 0,
           off: summary.off || 0,
           rep: summary.rep || 0,
           app: summary.fam || 0,
+          bas: summary.bas || 0, // NEW: Basic field
+          adv: summary.adv || 0, // NEW: Advance field
           att: summary.att || 0
         };
       });
@@ -344,6 +349,7 @@ app.post('/api/sales', async (req, res) => {
           const month = parseInt(monthKey, 10);
           if (isNaN(month)) continue;
           const summary = monthlySummary[monthKey];
+          // UPDATED: Include bas and adv in the upsert data
           leadSummaryToUpsert.push({ 
             employee_id: empId, 
             month: month, 
@@ -351,6 +357,8 @@ app.post('/api/sales', async (req, res) => {
             off: summary.off || 0, 
             rep: summary.rep || 0, 
             fam: summary.app || 0,
+            bas: summary.bas || 0, // NEW: Basic field
+            adv: summary.adv || 0, // NEW: Advance field
             att: summary.att || 0
           });
         }
