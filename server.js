@@ -38,12 +38,12 @@ app.get('/api/sales', async (req, res) => {
       { data: batchMonthMapping, error: batchMappingError },
       { data: webinarData, error: webinarDataError }
     ] = await Promise.all([
-      supabase.from('employees').select('*'),
+      supabase.from('employees').select('id, name, extra_batch_data'), // <-- MODIFIED: Added extra_batch_data
       supabase.from('daily_bookings').select('*'),
       supabase.from('lead_summary').select('*'),
       supabase.from('monthly_leads').select('*'),
       supabase.from('batch_leads').select('*'),
-      supabase.from('batches').select('*'),
+      supabase.from('batches').select('id, label, thc, extra_thc'), // <-- MODIFIED: Added extra_thc
       supabase.from('monthly_batch_admin_leads').select('*'),
       supabase.from('custom_headers').select('*'),
       supabase.from('webinar_leads').select('*'),
@@ -72,7 +72,7 @@ app.get('/api/sales', async (req, res) => {
       leadSummary: {},
       monthlyLeads: {},
       monthlyLeadsByYear: {}, // NEW: Year-wise monthly leads
-      batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
+      batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {}, newColumns: {}, thcNewColumns: {} },
       monthlyBatchAdmin: {},
       customHeaders: {
         daily: [], 
@@ -195,6 +195,30 @@ app.get('/api/sales', async (req, res) => {
       });
     });
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
+    
+    // --- START: NEW CODE TO LOAD FROM JSONB COLUMNS ---
+
+    // Process the 6 new columns for each employee from the employees table
+    formattedData.batchData.newColumns = {};
+    employees.forEach(emp => {
+      if (emp.extra_batch_data && emp.extra_batch_data.newColumns) {
+        formattedData.batchData.newColumns[emp.name] = emp.extra_batch_data.newColumns;
+      } else {
+        // Ensure the structure exists with default zeros
+        formattedData.batchData.newColumns[emp.name] = [0, 0, 0, 0, 0, 0];
+      }
+    });
+
+    // Process the 6 new THC columns from the batches table
+    // We'll just take the values from the first batch entry if it exists
+    if (batches.length > 0 && batches[0].extra_thc && batches[0].extra_thc.thcNewColumns) {
+      formattedData.batchData.thcNewColumns = batches[0].extra_thc.thcNewColumns;
+    } else {
+      // Ensure the structure exists with default zeros
+      formattedData.batchData.thcNewColumns = [0, 0, 0, 0, 0, 0];
+    }
+
+    // --- END: NEW CODE ---
     
     // Process monthly batch admin
     employees.forEach(emp => {
@@ -434,6 +458,41 @@ app.post('/api/sales', async (req, res) => {
       } 
       await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
     }
+
+    // --- START: NEW CODE TO SAVE TO JSONB COLUMNS ---
+
+    // --- Save the 6 new columns for each employee ---
+    if (batchData && batchData.newColumns) {
+      for (const empName in batchData.newColumns) {
+        const empId = empIdMap[empName];
+        if (!empId) continue;
+
+        const cols = batchData.newColumns[empName];
+        const { error: updateError } = await supabase
+          .from('employees')
+          .update({ extra_batch_data: { newColumns: cols } })
+          .eq('id', empId);
+
+        if (updateError) throw updateError;
+      }
+    }
+
+    // --- Save the 6 new THC columns ---
+    if (batchData && batchData.thcNewColumns) {
+      // We will update the first batch record with the THC values.
+      // This is a simple way to store a single set of global values.
+      const firstBatchId = batchData.batches[0]?.id;
+      if (firstBatchId) {
+        const { error: updateError } = await supabase
+          .from('batches')
+          .update({ extra_thc: { thcNewColumns: batchData.thcNewColumns } })
+          .eq('id', firstBatchId);
+
+        if (updateError) throw updateError;
+      }
+    }
+
+    // --- END: NEW CODE ---
 
     // --- Save Custom Headers ---
     if (customHeaders) {
