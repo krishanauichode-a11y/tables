@@ -3,7 +3,6 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 const path = require('path');
-require('dotenv').config();
 
 // --- App Initialization ---
 const app = express();
@@ -13,40 +12,18 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Add rate limiting
-const rateLimit = require('express-rate-limit');
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests from this IP, please try again after 15 minutes'
-});
-app.use('/api/', apiLimiter);
-
 // Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+// WARNING: Move these to environment variables for production!
+const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-// Add logging
-const winston = require('winston');
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'error.log', level: 'error' })
-  ]
-});
 
 // --- API Routes ---
 
 // Get ALL sales data, including webinar leads and custom headers
 app.get('/api/sales', async (req, res) => {
   try {
-    logger.log(">>> [DEBUG] Fetching data from Supabase...");
+    console.log(">>> [DEBUG] Fetching data from Supabase...");
     const [
       { data: employees, error: empError },
       { data: dailyBookings, error: dailyError },
@@ -86,26 +63,20 @@ app.get('/api/sales', async (req, res) => {
     if (batchMappingError) throw batchMappingError;
     if (webinarDataError) throw webinarDataError;
     
-    logger.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
+    console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
     const formattedData = {
       employees: employees.map(e => e.name),
       dailyBookings: {}, 
-      dailyBookingsByYear: {},
+      dailyBookingsByYear: {}, // NEW: Year-wise daily bookings
       leadSummary: {},
       monthlyLeads: {},
-      monthlyLeadsByYear: {},
-      batchData: { 
-        employees: employees.map(e => e.name), 
-        batches: batches, 
-        batchLeads: {}, 
-        thc: {},
-        newColumns: {}, // Store new columns data
-        thcNewColumns: [0, 0, 0, 0, 0, 0] // Store THC new columns data
-      },
+      monthlyLeadsByYear: {}, // NEW: Year-wise monthly leads
+      batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
       monthlyBatchAdmin: {},
       customHeaders: {
         daily: [], 
+        // UPDATED: Added Basic and Advance columns to summary headers
         summary: ["Team Member", "Fresher", "Offer", "Repeater", "Family", "Basic", "Advance", "TOTAL", "Attended", "Postponed"], 
         monthly: ["Team Member"], 
         batch: ["Team Member"], 
@@ -124,7 +95,7 @@ app.get('/api/sales', async (req, res) => {
         batchName: mapping.batch_name,
         monthIndex: mapping.month_index,
         monthName: mapping.month_name,
-        year: mapping.year || "2026"
+        year: mapping.year || "2026" // Default to 2026 if not specified
       }));
     }
 
@@ -143,22 +114,22 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
-    // Process daily bookings - Year-wise structure
+    // Process daily bookings - NEW: Year-wise structure
     employees.forEach(emp => {
       formattedData.dailyBookings[emp.name] = {};
       formattedData.dailyBookingsByYear[emp.name] = {};
       
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
       empDailyBookings.forEach(booking => {
-        const year = booking.year || "2026";
+        const year = booking.year || "2026"; // Default year if not specified
         
-        // Legacy structure
+        // Legacy structure (for backward compatibility)
         if (!formattedData.dailyBookings[emp.name][booking.month]) {
           formattedData.dailyBookings[emp.name][booking.month] = {};
         }
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
         
-        // Year-wise structure
+        // NEW: Year-wise structure
         if (!formattedData.dailyBookingsByYear[emp.name][year]) {
           formattedData.dailyBookingsByYear[emp.name][year] = {};
         }
@@ -173,38 +144,41 @@ app.get('/api/sales', async (req, res) => {
     employees.forEach(emp => {
       formattedData.leadSummary[emp.name] = {};
       for (let month = 0; month < 12; month++) {
-        formattedData.leadSummary[emp.name][month] = { 
-          pre: 0, off: 0, rep: 0, app: 0, bas: 0, adv: 0, att: 0 
-        };
+        // UPDATED: Include bas and adv in the default structure
+        formattedData.leadSummary[emp.name][month] = { pre: 0, off: 0, rep: 0, app: 0, bas: 0, adv: 0, att: 0 };
       }
       const empSummary = leadSummary.filter(s => s.employee_id === emp.id);
       empSummary.forEach(summary => {
+        // UPDATED: Include bas and adv in the data structure
         formattedData.leadSummary[emp.name][summary.month] = {
           pre: summary.fre || 0,
           off: summary.off || 0,
           rep: summary.rep || 0,
           app: summary.fam || 0,
-          bas: summary.bas || 0,
-          adv: summary.adv || 0,
+          bas: summary.bas || 0, // NEW: Basic field
+          adv: summary.adv || 0, // NEW: Advance field
           att: summary.att || 0
         };
       });
     });
     
-    // Process monthly leads - Year-wise structure
+    // Process monthly leads - NEW: Year-wise structure
     employees.forEach(emp => {
       const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
       
+      // Legacy structure
       formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
+      
+      // NEW: Year-wise structure
       formattedData.monthlyLeadsByYear[emp.name] = {};
       
       empMonthly.forEach(month => {
-        const year = month.year || "2026";
+        const year = month.year || "2026"; // Default year if not specified
         
         // Legacy structure
         formattedData.monthlyLeads[emp.name][month.month] = month.value;
         
-        // Year-wise structure
+        // NEW: Year-wise structure
         if (!formattedData.monthlyLeadsByYear[emp.name][year]) {
           formattedData.monthlyLeadsByYear[emp.name][year] = Array(12).fill(0);
         }
@@ -212,18 +186,14 @@ app.get('/api/sales', async (req, res) => {
       });
     });
     
-    // Process batch data including new columns
+    // Process batch data
     employees.forEach(emp => {
       formattedData.batchData.batchLeads[emp.name] = {};
-      formattedData.batchData.newColumns[emp.name] = [0, 0, 0, 0, 0, 0]; // Initialize new columns
-      
       batches.forEach(batch => {
         const batchLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === batch.id);
         formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
       });
     });
-    
-    // Process THC data
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
     
     // Process monthly batch admin
@@ -268,10 +238,10 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
-    logger.log(">>> [DEBUG] Data formatted. Sending response.");
+    console.log(">>> [DEBUG] Data formatted. Sending response.");
     res.json(formattedData);
   } catch (error) {
-    logger.error('!!! [DEBUG] ERROR IN /api/sales !!!', error);
+    console.error('!!! [DEBUG] ERROR IN /api/sales !!!', error);
     res.status(500).json({ error: 'Failed to fetch sales data', details: error.message });
   }
 });
@@ -282,10 +252,10 @@ app.post('/api/sales', async (req, res) => {
     const { 
       employees, 
       dailyBookings, 
-      dailyBookingsByYear,
+      dailyBookingsByYear, // NEW: Year-wise daily bookings
       leadSummary, 
       monthlyLeads, 
-      monthlyLeadsByYear,
+      monthlyLeadsByYear, // NEW: Year-wise monthly leads
       batchData, 
       monthlyBatchAdmin, 
       customHeaders, 
@@ -295,7 +265,7 @@ app.post('/api/sales', async (req, res) => {
       webinarData 
     } = req.body;
     
-    logger.log(">>> [SAVE-DEBUG] Received request to save data.");
+    console.log(">>> [SAVE-DEBUG] Received request to save data.");
 
     const empIdMap = {};
     for (const empName of employees) {
@@ -331,14 +301,14 @@ app.post('/api/sales', async (req, res) => {
               month: parseInt(month), 
               day: parseInt(day), 
               value: dailyBookings[empName][month][day],
-              year: "2026"
+              year: "2026" // Default year for legacy data
             }); 
           } 
         } 
       }
     }
     
-    // Process year-wise daily bookings
+    // NEW: Process year-wise daily bookings
     if (dailyBookingsByYear) {
       for (const empName in dailyBookingsByYear) {
         const empId = empIdMap[empName];
@@ -360,7 +330,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // Delete and re-insert daily bookings
+    // Delete existing daily bookings for all employees and re-insert
     const employeeIds = Object.values(empIdMap);
     await supabase.from('daily_bookings').delete().in('employee_id', employeeIds);
     
@@ -368,7 +338,7 @@ app.post('/api/sales', async (req, res) => {
       await upsertData('daily_bookings', dailyBookingsToUpsert, 'employee_id, month, day, year');
     }
     
-    // --- Save Lead Summary ---
+    // --- Save Lead Summary (Month-wise) ---
     const leadSummaryToUpsert = []; 
     for (const empName in leadSummary) { 
       const empId = empIdMap[empName]; 
@@ -379,6 +349,7 @@ app.post('/api/sales', async (req, res) => {
           const month = parseInt(monthKey, 10);
           if (isNaN(month)) continue;
           const summary = monthlySummary[monthKey];
+          // UPDATED: Include bas and adv in the upsert data
           leadSummaryToUpsert.push({ 
             employee_id: empId, 
             month: month, 
@@ -386,8 +357,8 @@ app.post('/api/sales', async (req, res) => {
             off: summary.off || 0, 
             rep: summary.rep || 0, 
             fam: summary.app || 0,
-            bas: summary.bas || 0,
-            adv: summary.adv || 0,
+            bas: summary.bas || 0, // NEW: Basic field
+            adv: summary.adv || 0, // NEW: Advance field
             att: summary.att || 0
           });
         }
@@ -408,13 +379,13 @@ app.post('/api/sales', async (req, res) => {
             employee_id: empId, 
             month: month, 
             value: monthlyLeads[empName][month] || 0,
-            year: "2026"
+            year: "2026" // Default year for legacy data
           }); 
         } 
       }
     }
     
-    // Process year-wise monthly leads
+    // NEW: Process year-wise monthly leads
     if (monthlyLeadsByYear) {
       for (const empName in monthlyLeadsByYear) {
         const empId = empIdMap[empName];
@@ -433,7 +404,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // Delete and re-insert monthly leads
+    // Delete existing monthly leads for all employees and re-insert
     await supabase.from('monthly_leads').delete().in('employee_id', employeeIds);
     
     if (monthlyLeadsToUpsert.length > 0) {
@@ -442,7 +413,13 @@ app.post('/api/sales', async (req, res) => {
 
     // --- Save Batch Data ---
     if (batchData) {
-      // Save batch leads
+      const batchesToUpsert = batchData.batches.map(batch => ({ 
+        id: batch.id, 
+        label: batch.label, 
+        thc: batchData.thc[batch.id] || 0 
+      })); 
+      await upsertData('batches', batchesToUpsert, 'id'); 
+      
       const batchLeadsToUpsert = []; 
       for (const empName in batchData.batchLeads) { 
         const empId = empIdMap[empName]; 
@@ -456,40 +433,7 @@ app.post('/api/sales', async (req, res) => {
         } 
       } 
       await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
-      
-      // Save new columns data as JSON in batches table
-      const batchesToUpdate = [];
-      for (const batch of batchData.batches) {
-        const newColumnsData = {};
-        employees.forEach(emp => {
-          if (batchData.newColumns && batchData.newColumns[emp.name]) {
-            newColumnsData[emp.name] = batchData.newColumns[emp.name];
-          }
-        });
-        
-        batchesToUpdate.push({
-          id: batch.id,
-          label: batch.label,
-          thc: batchData.thc[batch.id] || 0,
-          new_columns: newColumnsData // Store new columns as JSON
-        });
-      }
-      
-      if (batchesToUpdate.length > 0) {
-        await upsertData('batches', batchesToUpdate, 'id');
-      }
-      
-      // Save THC new columns data as JSON in a custom settings table
-      if (batchData.thcNewColumns) {
-        const thcNewColumnsData = {
-          key: 'thc_new_columns',
-          value: JSON.stringify(batchData.thcNewColumns)
-        };
-        
-        await supabase.from('custom_settings').upsert(thcNewColumnsData, {
-          onConflict: 'key'
-        });
-      }
+    }
 
     // --- Save Custom Headers ---
     if (customHeaders) {
@@ -538,7 +482,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- Save Webinar Leads ---
+    // --- Save Webinar Leads --- for year-based structure
     if (webinarLeads) {
       const webinarLeadsToUpsert = [];
       for (const year in webinarLeads) {
@@ -592,7 +536,7 @@ app.post('/api/sales', async (req, res) => {
         batch_name: mapping.batchName,
         month_index: mapping.monthIndex,
         month_name: mapping.monthName,
-        year: mapping.year || "2026"
+        year: mapping.year || "2026" // Include year in mapping
       }));
       
       if (mappingsToInsert.length > 0) {
@@ -601,7 +545,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // --- Save Webinar Batch Data ---
+    // --- Save Webinar Batch Data with year-based structure ---
     if (webinarData) {
       const { error: deleteError } = await supabase.from('webinar_data').delete().neq('id', 0);
       if (deleteError) throw deleteError;
@@ -623,11 +567,11 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    logger.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
+    console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
     res.json({ success: true });
 
   } catch (error) {
-    logger.error('!!! [SAVE-DEBUG] CATASTROPHIC ERROR IN SAVE ROUTE !!!', error);
+    console.error('!!! [SAVE-DEBUG] CATASTROPHIC ERROR IN SAVE ROUTE !!!', error);
     res.status(500).json({ error: 'Failed to save sales data', details: error.message });
   }
 });
@@ -636,23 +580,15 @@ app.post('/api/sales', async (req, res) => {
 app.post('/api/employee', async (req, res) => {
   try {
     const { name } = req.body;
-    
-    // Validate input
-    const { error } = Joi.string().min(2).max(50).required().validate(name);
-    if (error) {
-      return res.status(400).json({ error: error.details[0].message });
-    }
-    
-    const { data, error: insertError } = await supabase.from('employees').insert({ name }).select().single();
-    if (insertError) { 
-      if (insertError.code === '23505') {
-        return res.status(409).json({ error: 'Employee with this name already exists' }); 
-      }
-      throw insertError; 
+    if (!name) return res.status(400).json({ error: 'Employee name is required' });
+    const { data, error } = await supabase.from('employees').insert({ name }).select().single();
+    if (error) { 
+      if (error.code === '23505') return res.status(409).json({ error: 'Employee with this name already exists' }); 
+      throw error; 
     }
     res.json({ success: true, employee: data });
   } catch (error) { 
-    logger.error('Error adding employee:', error); 
+    console.error('Error adding employee:', error); 
     res.status(500).json({ error: 'Failed to add employee', details: error.message }); 
   }
 });
@@ -662,10 +598,8 @@ app.delete('/api/employee/:name', async (req, res) => {
   try {
     const { name } = req.params;
     
-    // Validate input
-    const { error } = Joi.string().min(2).max(50).required().validate(name);
-    if (error) {
-      return res.status(400).json({ error: error.details[0].message });
+    if (!name) {
+      return res.status(400).json({ error: 'Employee name is required' });
     }
     
     // First, get the employee ID
@@ -681,7 +615,7 @@ app.delete('/api/employee/:name', async (req, res) => {
     
     const employeeId = employee.id;
     
-    // Delete all related data in the correct order
+    // Delete all related data in the correct order to respect foreign key constraints
     const deleteOperations = [
       supabase.from('employee_batches').delete().eq('employee_id', employeeId),
       supabase.from('daily_bookings').delete().eq('employee_id', employeeId),
@@ -705,11 +639,10 @@ app.delete('/api/employee/:name', async (req, res) => {
       
     if (deleteError) throw deleteError;
     
-    logger.log(`Employee "${name}" and all associated data have been removed`);
     res.json({ success: true, message: `Employee "${name}" and all associated data have been removed` });
     
   } catch (error) {
-    logger.error('Error removing employee:', error);
+    console.error('Error removing employee:', error);
     res.status(500).json({ 
       error: 'Failed to remove employee', 
       details: error.message 
@@ -719,5 +652,5 @@ app.delete('/api/employee/:name', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { 
-  logger.log(`Server is running on http://localhost:${port}`); 
+  console.log(`Server is running on http://localhost:${port}`); 
 });
