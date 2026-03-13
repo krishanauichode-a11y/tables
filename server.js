@@ -72,7 +72,16 @@ app.get('/api/sales', async (req, res) => {
       leadSummary: {},
       monthlyLeads: {},
       monthlyLeadsByYear: {}, // NEW: Year-wise monthly leads
-      batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
+      batchData: { 
+        employees: employees.map(e => e.name), 
+        batches: batches, 
+        batchLeads: {}, 
+        thc: {},
+        // NEW: Initialize new columns data using the same structure as existing columns
+        newColumns: {},
+        newColumnHeaders: [],
+        thcNewColumns: []
+      },
       monthlyBatchAdmin: {},
       customHeaders: {
         daily: [], 
@@ -113,6 +122,10 @@ app.get('/api/sales', async (req, res) => {
         }
       });
     }
+
+    // NEW: Define new column headers (can be customized later)
+    // For now, we'll use the same headers as in the frontend
+    formattedData.batchData.newColumnHeaders = ["New Column 1", "New Column 2", "New Column 3", "New Column 4", "New Column 5", "New Column 6"];
 
     // Process daily bookings - NEW: Year-wise structure
     employees.forEach(emp => {
@@ -186,15 +199,35 @@ app.get('/api/sales', async (req, res) => {
       });
     });
     
-    // Process batch data
+    // Process batch data - INCLUDING NEW COLUMNS
     employees.forEach(emp => {
       formattedData.batchData.batchLeads[emp.name] = {};
+      formattedData.batchData.newColumns[emp.name] = []; // Initialize new columns array
+      
+      // Process existing batch leads
       batches.forEach(batch => {
         const batchLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === batch.id);
         formattedData.batchData.batchLeads[emp.name][batch.id] = batchLead ? batchLead.value : 0;
       });
+      
+      // NEW: Process new columns using special batch IDs
+      for (let i = 1; i <= 6; i++) {
+        const newColumnBatchId = `new_column_${i}`;
+        const newColumnLead = batchLeads.find(bl => bl.employee_id === emp.id && bl.batch_id === newColumnBatchId);
+        formattedData.batchData.newColumns[emp.name][i - 1] = newColumnLead ? newColumnLead.value : 0;
+      }
     });
+    
+    // Process THC for existing batches
     batches.forEach(b => formattedData.batchData.thc[b.id] = b.thc || 0);
+    
+    // NEW: Process THC for new columns using special batch IDs
+    formattedData.batchData.thcNewColumns = [];
+    for (let i = 1; i <= 6; i++) {
+      const newColumnBatchId = `new_column_${i}`;
+      const newColumnBatch = batches.find(b => b.id === newColumnBatchId);
+      formattedData.batchData.thcNewColumns[i - 1] = newColumnBatch ? (newColumnBatch.thc || 0) : 0;
+    }
     
     // Process monthly batch admin
     employees.forEach(emp => {
@@ -411,8 +444,9 @@ app.post('/api/sales', async (req, res) => {
       await upsertData('monthly_leads', monthlyLeadsToUpsert, 'employee_id, month, year');
     }
 
-    // --- Save Batch Data ---
+    // --- Save Batch Data INCLUDING NEW COLUMNS ---
     if (batchData) {
+      // Save existing batches
       const batchesToUpsert = batchData.batches.map(batch => ({ 
         id: batch.id, 
         label: batch.label, 
@@ -420,6 +454,7 @@ app.post('/api/sales', async (req, res) => {
       })); 
       await upsertData('batches', batchesToUpsert, 'id'); 
       
+      // Save existing batch leads
       const batchLeadsToUpsert = []; 
       for (const empName in batchData.batchLeads) { 
         const empId = empIdMap[empName]; 
@@ -433,6 +468,48 @@ app.post('/api/sales', async (req, res) => {
         } 
       } 
       await upsertData('batch_leads', batchLeadsToUpsert, 'employee_id, batch_id');
+      
+      // NEW: Save new columns data using the same batch_leads table with special batch IDs
+      if (batchData.newColumns) {
+        const newColumnsToUpsert = [];
+        for (const empName in batchData.newColumns) {
+          const empId = empIdMap[empName];
+          if (!empId) continue;
+          
+          const empNewColumns = batchData.newColumns[empName];
+          if (Array.isArray(empNewColumns)) {
+            empNewColumns.forEach((value, index) => {
+              // Use special batch IDs for new columns: new_column_1, new_column_2, etc.
+              newColumnsToUpsert.push({
+                employee_id: empId,
+                batch_id: `new_column_${index + 1}`,
+                value: value || 0
+              });
+            });
+          }
+        }
+        
+        if (newColumnsToUpsert.length > 0) {
+          await upsertData('batch_leads', newColumnsToUpsert, 'employee_id, batch_id');
+        }
+      }
+      
+      // NEW: Save new column batches and their THC values
+      if (batchData.newColumnHeaders && batchData.thcNewColumns) {
+        const newBatchesToUpsert = [];
+        batchData.newColumnHeaders.forEach((header, index) => {
+          const batchId = `new_column_${index + 1}`;
+          newBatchesToUpsert.push({
+            id: batchId,
+            label: header,
+            thc: batchData.thcNewColumns[index] || 0
+          });
+        });
+        
+        if (newBatchesToUpsert.length > 0) {
+          await upsertData('batches', newBatchesToUpsert, 'id');
+        }
+      }
     }
 
     // --- Save Custom Headers ---
