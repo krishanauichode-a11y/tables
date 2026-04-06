@@ -38,7 +38,6 @@ app.get('/api/sales', async (req, res) => {
       { data: batchMonthMapping, error: batchMappingError },
       { data: webinarData, error: webinarDataError }
     ] = await Promise.all([
-      // ✅ Default order - newest employees at bottom
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
       supabase.from('lead_summary').select('*'),
@@ -69,14 +68,15 @@ app.get('/api/sales', async (req, res) => {
     const formattedData = {
       employees: employees.map(e => e.name),
       dailyBookings: {}, 
-      dailyBookingsByYear: {},
+      dailyBookingsByYear: {}, // NEW: Year-wise daily bookings
       leadSummary: {},
       monthlyLeads: {},
-      monthlyLeadsByYear: {},
+      monthlyLeadsByYear: {}, // NEW: Year-wise monthly leads
       batchData: { employees: employees.map(e => e.name), batches: batches, batchLeads: {}, thc: {} },
       monthlyBatchAdmin: {},
       customHeaders: {
         daily: [], 
+        // UPDATED: Added Basic and Advance columns to summary headers
         summary: ["Team Member", "Fresher", "Offer", "Repeater", "Family", "Basic", "Advance", "TOTAL", "Attended", "Postponed"], 
         monthly: ["Team Member"], 
         batch: ["Team Member"], 
@@ -95,7 +95,7 @@ app.get('/api/sales', async (req, res) => {
         batchName: mapping.batch_name,
         monthIndex: mapping.month_index,
         monthName: mapping.month_name,
-        year: mapping.year || "2026"
+        year: mapping.year || "2026" // Default to 2026 if not specified
       }));
     }
 
@@ -114,20 +114,22 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
-    // Process daily bookings - Year-wise structure
+    // Process daily bookings - NEW: Year-wise structure
     employees.forEach(emp => {
       formattedData.dailyBookings[emp.name] = {};
       formattedData.dailyBookingsByYear[emp.name] = {};
       
       const empDailyBookings = dailyBookings.filter(d => d.employee_id === emp.id);
       empDailyBookings.forEach(booking => {
-        const year = booking.year || "2026";
+        const year = booking.year || "2026"; // Default year if not specified
         
+        // Legacy structure (for backward compatibility)
         if (!formattedData.dailyBookings[emp.name][booking.month]) {
           formattedData.dailyBookings[emp.name][booking.month] = {};
         }
         formattedData.dailyBookings[emp.name][booking.month][booking.day] = booking.value;
         
+        // NEW: Year-wise structure
         if (!formattedData.dailyBookingsByYear[emp.name][year]) {
           formattedData.dailyBookingsByYear[emp.name][year] = {};
         }
@@ -142,34 +144,41 @@ app.get('/api/sales', async (req, res) => {
     employees.forEach(emp => {
       formattedData.leadSummary[emp.name] = {};
       for (let month = 0; month < 12; month++) {
+        // UPDATED: Include bas and adv in the default structure
         formattedData.leadSummary[emp.name][month] = { pre: 0, off: 0, rep: 0, app: 0, bas: 0, adv: 0, att: 0 };
       }
       const empSummary = leadSummary.filter(s => s.employee_id === emp.id);
       empSummary.forEach(summary => {
+        // UPDATED: Include bas and adv in the data structure
         formattedData.leadSummary[emp.name][summary.month] = {
           pre: summary.fre || 0,
           off: summary.off || 0,
           rep: summary.rep || 0,
           app: summary.fam || 0,
-          bas: summary.bas || 0,
-          adv: summary.adv || 0,
+          bas: summary.bas || 0, // NEW: Basic field
+          adv: summary.adv || 0, // NEW: Advance field
           att: summary.att || 0
         };
       });
     });
     
-    // Process monthly leads - Year-wise structure
+    // Process monthly leads - NEW: Year-wise structure
     employees.forEach(emp => {
       const empMonthly = monthlyLeads.filter(m => m.employee_id === emp.id);
       
+      // Legacy structure
       formattedData.monthlyLeads[emp.name] = Array(12).fill(0);
+      
+      // NEW: Year-wise structure
       formattedData.monthlyLeadsByYear[emp.name] = {};
       
       empMonthly.forEach(month => {
-        const year = month.year || "2026";
+        const year = month.year || "2026"; // Default year if not specified
         
+        // Legacy structure
         formattedData.monthlyLeads[emp.name][month.month] = month.value;
         
+        // NEW: Year-wise structure
         if (!formattedData.monthlyLeadsByYear[emp.name][year]) {
           formattedData.monthlyLeadsByYear[emp.name][year] = Array(12).fill(0);
         }
@@ -243,10 +252,10 @@ app.post('/api/sales', async (req, res) => {
     const { 
       employees, 
       dailyBookings, 
-      dailyBookingsByYear, 
+      dailyBookingsByYear, // NEW: Year-wise daily bookings
       leadSummary, 
       monthlyLeads, 
-      monthlyLeadsByYear, 
+      monthlyLeadsByYear, // NEW: Year-wise monthly leads
       batchData, 
       monthlyBatchAdmin, 
       customHeaders, 
@@ -280,6 +289,7 @@ app.post('/api/sales', async (req, res) => {
     // --- Save Daily Bookings ---
     const dailyBookingsToUpsert = [];
     
+    // Process legacy daily bookings
     if (dailyBookings) {
       for (const empName in dailyBookings) { 
         const empId = empIdMap[empName]; 
@@ -291,13 +301,14 @@ app.post('/api/sales', async (req, res) => {
               month: parseInt(month), 
               day: parseInt(day), 
               value: dailyBookings[empName][month][day],
-              year: "2026"
+              year: "2026" // Default year for legacy data
             }); 
           } 
         } 
       }
     }
     
+    // NEW: Process year-wise daily bookings
     if (dailyBookingsByYear) {
       for (const empName in dailyBookingsByYear) {
         const empId = empIdMap[empName];
@@ -319,6 +330,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
+    // Delete existing daily bookings for all employees and re-insert
     const employeeIds = Object.values(empIdMap);
     await supabase.from('daily_bookings').delete().in('employee_id', employeeIds);
     
@@ -337,6 +349,7 @@ app.post('/api/sales', async (req, res) => {
           const month = parseInt(monthKey, 10);
           if (isNaN(month)) continue;
           const summary = monthlySummary[monthKey];
+          // UPDATED: Include bas and adv in the upsert data
           leadSummaryToUpsert.push({ 
             employee_id: empId, 
             month: month, 
@@ -344,8 +357,8 @@ app.post('/api/sales', async (req, res) => {
             off: summary.off || 0, 
             rep: summary.rep || 0, 
             fam: summary.app || 0,
-            bas: summary.bas || 0,
-            adv: summary.adv || 0,
+            bas: summary.bas || 0, // NEW: Basic field
+            adv: summary.adv || 0, // NEW: Advance field
             att: summary.att || 0
           });
         }
@@ -356,6 +369,7 @@ app.post('/api/sales', async (req, res) => {
     // --- Save Monthly Leads ---
     const monthlyLeadsToUpsert = [];
     
+    // Process legacy monthly leads
     if (monthlyLeads) {
       for (const empName in monthlyLeads) { 
         const empId = empIdMap[empName]; 
@@ -365,12 +379,13 @@ app.post('/api/sales', async (req, res) => {
             employee_id: empId, 
             month: month, 
             value: monthlyLeads[empName][month] || 0,
-            year: "2026"
+            year: "2026" // Default year for legacy data
           }); 
         } 
       }
     }
     
+    // NEW: Process year-wise monthly leads
     if (monthlyLeadsByYear) {
       for (const empName in monthlyLeadsByYear) {
         const empId = empIdMap[empName];
@@ -389,6 +404,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
+    // Delete existing monthly leads for all employees and re-insert
     await supabase.from('monthly_leads').delete().in('employee_id', employeeIds);
     
     if (monthlyLeadsToUpsert.length > 0) {
@@ -466,7 +482,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- Save Webinar Leads ---
+    // --- Save Webinar Leads --- for year-based structure
     if (webinarLeads) {
       const webinarLeadsToUpsert = [];
       for (const year in webinarLeads) {
@@ -479,6 +495,7 @@ app.post('/api/sales', async (req, res) => {
         }
       }
       
+      // Delete existing webinar leads for all years being updated
       const yearsToUpdate = Object.keys(webinarLeads);
       for (const year of yearsToUpdate) {
         const { error: deleteError } = await supabase.from('webinar_leads').delete().eq('year', year);
@@ -519,7 +536,7 @@ app.post('/api/sales', async (req, res) => {
         batch_name: mapping.batchName,
         month_index: mapping.monthIndex,
         month_name: mapping.monthName,
-        year: mapping.year || "2026"
+        year: mapping.year || "2026" // Include year in mapping
       }));
       
       if (mappingsToInsert.length > 0) {
@@ -528,7 +545,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
     
-    // --- Save Webinar Batch Data ---
+    // --- Save Webinar Batch Data with year-based structure ---
     if (webinarData) {
       const { error: deleteError } = await supabase.from('webinar_data').delete().neq('id', 0);
       if (deleteError) throw deleteError;
@@ -585,6 +602,7 @@ app.delete('/api/employee/:name', async (req, res) => {
       return res.status(400).json({ error: 'Employee name is required' });
     }
     
+    // First, get the employee ID
     const { data: employee, error: empError } = await supabase
       .from('employees')
       .select('id')
@@ -597,6 +615,7 @@ app.delete('/api/employee/:name', async (req, res) => {
     
     const employeeId = employee.id;
     
+    // Delete all related data in the correct order to respect foreign key constraints
     const deleteOperations = [
       supabase.from('employee_batches').delete().eq('employee_id', employeeId),
       supabase.from('daily_bookings').delete().eq('employee_id', employeeId),
@@ -606,11 +625,13 @@ app.delete('/api/employee/:name', async (req, res) => {
       supabase.from('monthly_batch_admin_leads').delete().eq('employee_id', employeeId)
     ];
     
+    // Execute all delete operations
     for (const operation of deleteOperations) {
       const { error } = await operation;
       if (error) throw error;
     }
     
+    // Finally, delete the employee
     const { error: deleteError } = await supabase
       .from('employees')
       .delete()
