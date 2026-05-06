@@ -35,7 +35,8 @@ app.get('/api/sales', async (req, res) => {
       { data: webinarLeads, error: webinarError },
       { data: employeeBatches, error: empBatchesError },
       { data: batchMonthMapping, error: batchMappingError },
-      { data: webinarData, error: webinarDataError }
+      { data: webinarData, error: webinarDataError },
+      { data: webinarPerformance, error: webinarPerformanceError }
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -48,25 +49,30 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('webinar_leads').select('*'),
       supabase.from('employee_batches').select('*'),
       supabase.from('batch_month_mapping').select('*').order('batch_index'),
-      supabase.from('webinar_data').select('*')
+      supabase.from('webinar_data').select('*'),
+      supabase.from('webinar_performance').select('*')
     ]);
 
     // Check for all errors
-    if (empError) throw empError; if (dailyError) throw dailyError;
-    if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
-    if (batchError) throw batchError; if (batchesError) throw batchesError;
+    if (empError) throw empError; 
+    if (dailyError) throw dailyError;
+    if (summaryError) throw summaryError; 
+    if (monthlyError) throw monthlyError;
+    if (batchError) throw batchError; 
+    if (batchesError) throw batchesError; 
     if (batchAdminError) throw batchAdminError;
     if (headersError) throw headersError;
     if (webinarError) throw webinarError;
     if (empBatchesError) throw empBatchesError;
     if (batchMappingError) throw batchMappingError;
     if (webinarDataError) throw webinarDataError;
+    if (webinarPerformanceError) throw webinarPerformanceError;
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
     const formattedData = {
       employees: employees.map(e => e.name),
-      employeeOrder: null, // FIX: Will be populated from saved order
+      employeeOrder: null, // Will be populated from saved order
       dailyBookings: {}, 
       dailyBookingsByYear: {},
       leadSummary: {},
@@ -84,7 +90,8 @@ app.get('/api/sales', async (req, res) => {
       webinarLeads: {},
       employeeBatches: {},
       batchToMonthMapping: [],
-      webinarData: {}
+      webinarData: {},
+      webinarPerformanceData: {}
     };
 
     // Process batch-to-month mappings with year
@@ -105,11 +112,9 @@ app.get('/api/sales', async (req, res) => {
     });
 
     // Process custom headers
-    // FIX: Extract employeeOrder from custom_headers, separate from real headers
     if (customHeaders && customHeaders.length > 0) {
       customHeaders.forEach(header => {
         if (header.table_name === '_employeeOrder') {
-          // This is the saved employee order — return it as employeeOrder
           formattedData.employeeOrder = header.headers;
         } else if (header.table_name && header.headers) {
           formattedData.customHeaders[header.table_name] = header.headers;
@@ -229,6 +234,21 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
+    // Process webinar performance data
+    formattedData.webinarPerformanceData = {};
+    if (webinarPerformance && webinarPerformance.length > 0) {
+      webinarPerformance.forEach(item => {
+        const year = item.year || "2026";
+        if (!formattedData.webinarPerformanceData[year]) {
+          formattedData.webinarPerformanceData[year] = {};
+        }
+        if (!formattedData.webinarPerformanceData[year][item.employee_name]) {
+          formattedData.webinarPerformanceData[year][item.employee_name] = Array(12).fill(0);
+        }
+        formattedData.webinarPerformanceData[year][item.employee_name][item.month] = item.lead_count;
+      });
+    }
+
     console.log(">>> [DEBUG] Data formatted. Sending response.");
     res.json(formattedData);
   } catch (error) {
@@ -242,7 +262,7 @@ app.post('/api/sales', async (req, res) => {
   try {
     const { 
       employees, 
-      employeeOrder,  // FIX: Receive employee order from frontend
+      employeeOrder,  // Receive employee order from frontend
       dailyBookings, 
       dailyBookingsByYear, 
       leadSummary, 
@@ -254,7 +274,8 @@ app.post('/api/sales', async (req, res) => {
       webinarLeads, 
       employeeBatches, 
       batchToMonthMapping, 
-      webinarData 
+      webinarData,
+      webinarPerformanceData
     } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
@@ -296,7 +317,7 @@ app.post('/api/sales', async (req, res) => {
             }); 
           } 
         } 
-      }
+      } 
     }
     
     if (dailyBookingsByYear) {
@@ -364,11 +385,11 @@ app.post('/api/sales', async (req, res) => {
           monthlyLeadsToUpsert.push({ 
             employee_id: empId, 
             month: month, 
-            value: monthlyLeads[empName][month] || 0,
+            value: monthlyLeads[emp.name][month] || 0,
             year: "2026"
           }); 
         } 
-      }
+      } 
     }
     
     if (monthlyLeadsByYear) {
@@ -432,8 +453,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- FIX: Save Employee Order into custom_headers as a special entry ---
-    // This MUST come AFTER the custom headers save above (which deletes all rows)
+    // --- Save Employee Order into custom_headers as a special entry ---
     if (employeeOrder && Array.isArray(employeeOrder)) {
       const { error: orderError } = await supabase.from('custom_headers').insert({
         table_name: '_employeeOrder',
@@ -508,7 +528,7 @@ app.post('/api/sales', async (req, res) => {
         if (!empId || !employeeBatches[empName]) continue;
         batchAssignments.push({ 
           employee_id: empId, 
-          batch_id: employeeBatches[empName] 
+          batch_id: employeeBatches[emp.name] 
         });
       }
       if (batchAssignments.length > 0) {
@@ -558,6 +578,27 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
+    // --- Save Webinar Performance Data ---
+    if (webinarPerformanceData) {
+      const webinarPerformanceToUpsert = [];
+      for (const year in webinarPerformanceData) {
+        for (const empName in webinarPerformanceData[year]) {
+          const empId = empIdMap[empName];
+          if (!empId) continue;
+          for (let month = 0; month < 12; month++) {
+            webinarPerformanceToUpsert.push({
+              employee_id: empId,
+              employee_name: empName,
+              year: year,
+              month: month,
+              lead_count: webinarPerformanceData[year][empName][month] || 0
+            });
+          }
+        }
+      }
+      await upsertData('webinar_performance', webinarPerformanceToUpsert, 'employee_id, year, month');
+    }
+
     console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
     res.json({ success: true });
 
@@ -605,7 +646,7 @@ app.delete('/api/employee/:name', async (req, res) => {
     
     const employeeId = employee.id;
     
-    // FIX: Also clean up the employee from the saved employeeOrder
+    // Clean up the employee from the saved employeeOrder
     const { data: orderRow } = await supabase
       .from('custom_headers')
       .select('id, headers')
