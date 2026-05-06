@@ -235,6 +235,27 @@ app.get('/api/sales', async (req, res) => {
     console.error('!!! [DEBUG] ERROR IN /api/sales !!!', error);
     res.status(500).json({ error: 'Failed to fetch sales data', details: error.message });
   }
+
+  formattedData.webinarPerformanceData = {};
+if (webinarPerformance && webinarPerformance.length > 0) {
+  webinarPerformance.forEach(item => {
+    const year = item.year || "2026";
+    if (!formattedData.webinarPerformanceData[year]) {
+      formattedData.webinarPerformanceData[year] = {};
+    }
+    if (!formattedData.webinarPerformanceData[year][item.employee_name]) {
+      formattedData.webinarPerformanceData[year][item.employee_name] = Array(12).fill(0);
+    }
+    formattedData.webinarPerformanceData[year][item.employee_name][item.month] = item.lead_count;
+  });
+}
+
+  const { data: webinarPerformance, error: webinarPerformanceError } = await supabase
+  .from('webinar_performance')
+  .select('*');
+
+if (webinarPerformanceError) throw webinarPerformanceError;
+
 });
 
 // Save ALL sales data, including webinar leads and employee batches
@@ -557,6 +578,27 @@ app.post('/api/sales', async (req, res) => {
         if (insertError) throw insertError;
       }
     }
+
+
+      if (webinarPerformanceData) {
+  const webinarPerformanceToUpsert = [];
+  for (const year in webinarPerformanceData) {
+    for (const empName in webinarPerformanceData[year]) {
+      const empId = empIdMap[empName];
+      if (!empId) continue;
+      for (let month = 0; month < 12; month++) {
+        webinarPerformanceToUpsert.push({
+          employee_id: empId,
+          employee_name: empName,
+          year: year,
+          month: month,
+          lead_count: webinarPerformanceData[year][empName][month] || 0
+        });
+      }
+    }
+  }
+  await upsertData('webinar_performance', webinarPerformanceToUpsert, 'employee_id, year, month');
+}
 
     console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
     res.json({ success: true });
