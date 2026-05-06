@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 // Initialize Supabase client
-// NOTE: In production, store these keys in environment variables (.env)
+// NOTE: In production, use environment variables for the URL and Key
 const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -235,9 +235,8 @@ app.get('/api/sales', async (req, res) => {
     // Process Webinar Performance Data (NEW)
     if (webinarPerformanceData && webinarPerformanceData.length > 0) {
       webinarPerformanceData.forEach(item => {
-        // Match the employee ID to the name to ensure consistency
+        // Match the employee ID (UUID) to the name
         const empObj = employees.find(e => e.id === item.employee_id);
-        // Fallback to item.employee_name if the join fails (though it shouldn't)
         const empName = empObj ? empObj.name : item.employee_name;
 
         if (empName) {
@@ -248,7 +247,6 @@ app.get('/api/sales', async (req, res) => {
           if (!formattedData.webinarPerformanceData[year][empName]) {
             formattedData.webinarPerformanceData[year][empName] = Array(12).fill(0);
           }
-          // Map 'lead_count' from your DB to the array index
           formattedData.webinarPerformanceData[year][empName][item.month] = item.lead_count;
         }
       });
@@ -585,7 +583,7 @@ app.post('/api/sales', async (req, res) => {
 
     // --- Save Webinar Performance Data (NEW) ---
     if (webinarPerformanceData) {
-      // Clean up existing data for these employees to avoid duplicate key errors
+      // Clean up existing data for these employees
       await supabase.from('webinar_performance').delete().in('employee_id', employeeIds);
 
       const perfDataToInsert = [];
@@ -599,13 +597,13 @@ app.post('/api/sales', async (req, res) => {
           const monthlyData = perfData[year][empName];
           if (Array.isArray(monthlyData)) {
             monthlyData.forEach((val, monthIndex) => {
-              // Map data to your specific columns: employee_id, employee_name, year, month, lead_count
+              // Map data to your specific columns: employee_id (UUID), employee_name, year, month, lead_count
               perfDataToInsert.push({
-                employee_id: empId,
-                employee_name: empName, // Saving the name as per your schema
-                year: year,
+                employee_id: empId, 
+                employee_name: empName, 
+                year: String(year),
                 month: monthIndex,
-                lead_count: val || 0
+                lead_count: Number(val) || 0
               });
             });
           }
