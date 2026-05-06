@@ -3,9 +3,6 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 const path = require('path');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const cookieParser = require('cookie-parser');
 
 // --- App Initialization ---
 const app = express();
@@ -14,92 +11,16 @@ const port = process.env.PORT || 3000;
 // --- Middleware ---
 app.use(cors());
 app.use(express.json());
-app.use(cookieParser());
-
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
 // Initialize Supabase client
 const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- Helper Functions ---
-function validateDataStructure(data) {
-  if (!data || typeof data !== 'object') {
-    throw new Error('Invalid data structure');
-  }
-}
-
-function logOperation(operation, data) {
-  console.log(`>>> [DEBUG] ${operation} with ${data.length} records`);
-}
-
-// --- Authentication Middleware ---
-const authenticateToken = (req, res, next) => {
-  const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
-};
-
-// --- Authentication Routes ---
-
-// Login
-app.post('/api/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-
-    // In a real app, you'd check against a database
-    // For now, we'll use hardcoded credentials
-    if (username === 'admin' && password === 'admin123') {
-      const user = { id: 1, username: username };
-      const token = jwt.sign(user, JWT_SECRET, { expiresIn: '24h' });
-      
-      res.cookie('token', token, { 
-        httpOnly: true, 
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
-      });
-      
-      res.json({ success: true, user });
-    } else {
-      res.status(401).json({ error: 'Invalid username or password' });
-    }
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed' });
-  }
-});
-
-// Logout
-app.post('/api/logout', (req, res) => {
-  res.clearCookie('token');
-  res.json({ success: true });
-});
-
-// Get current user
-app.get('/api/me', authenticateToken, (req, res) => {
-  res.json({ user: req.user });
-});
-
-// --- Protected API Routes (require authentication) ---
+// --- API Routes ---
 
 // Get ALL sales data, including webinar leads and custom headers
-app.get('/api/sales', authenticateToken, async (req, res) => {
+app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
     const [
@@ -114,8 +35,7 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       { data: webinarLeads, error: webinarError },
       { data: employeeBatches, error: empBatchesError },
       { data: batchMonthMapping, error: batchMappingError },
-      { data: webinarData, error: webinarDataError },
-      { data: webinarPerformance, error: webinarPerformanceError }
+      { data: webinarData, error: webinarDataError }
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -128,30 +48,25 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       supabase.from('webinar_leads').select('*'),
       supabase.from('employee_batches').select('*'),
       supabase.from('batch_month_mapping').select('*').order('batch_index'),
-      supabase.from('webinar_data').select('*'),
-      supabase.from('webinar_performance').select('*')
+      supabase.from('webinar_data').select('*')
     ]);
 
     // Check for all errors
-    if (empError) throw empError; 
-    if (dailyError) throw dailyError;
-    if (summaryError) throw summaryError; 
-    if (monthlyError) throw monthlyError;
-    if (batchError) throw batchError; 
-    if (batchesError) throw batchesError; 
+    if (empError) throw empError; if (dailyError) throw dailyError;
+    if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
+    if (batchError) throw batchError; if (batchesError) throw batchesError;
     if (batchAdminError) throw batchAdminError;
     if (headersError) throw headersError;
     if (webinarError) throw webinarError;
     if (empBatchesError) throw empBatchesError;
     if (batchMappingError) throw batchMappingError;
     if (webinarDataError) throw webinarDataError;
-    if (webinarPerformanceError) throw webinarPerformanceError;
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
     const formattedData = {
       employees: employees.map(e => e.name),
-      employeeOrder: null, // Will be populated from saved order
+      employeeOrder: null, // FIX: Will be populated from saved order
       dailyBookings: {}, 
       dailyBookingsByYear: {},
       leadSummary: {},
@@ -169,8 +84,7 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       webinarLeads: {},
       employeeBatches: {},
       batchToMonthMapping: [],
-      webinarData: {},
-      webinarPerformanceData: {}
+      webinarData: {}
     };
 
     // Process batch-to-month mappings with year
@@ -191,9 +105,11 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
     });
 
     // Process custom headers
+    // FIX: Extract employeeOrder from custom_headers, separate from real headers
     if (customHeaders && customHeaders.length > 0) {
       customHeaders.forEach(header => {
         if (header.table_name === '_employeeOrder') {
+          // This is the saved employee order — return it as employeeOrder
           formattedData.employeeOrder = header.headers;
         } else if (header.table_name && header.headers) {
           formattedData.customHeaders[header.table_name] = header.headers;
@@ -313,21 +229,6 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
       });
     }
 
-    // Process webinar performance data
-    formattedData.webinarPerformanceData = {};
-    if (webinarPerformance && webinarPerformance.length > 0) {
-      webinarPerformance.forEach(item => {
-        const year = item.year || "2026";
-        if (!formattedData.webinarPerformanceData[year]) {
-          formattedData.webinarPerformanceData[year] = {};
-        }
-        if (!formattedData.webinarPerformanceData[year][item.employee_name]) {
-          formattedData.webinarPerformanceData[year][item.employee_name] = Array(12).fill(0);
-        }
-        formattedData.webinarPerformanceData[year][item.employee_name][item.month] = item.lead_count;
-      });
-    }
-
     console.log(">>> [DEBUG] Data formatted. Sending response.");
     res.json(formattedData);
   } catch (error) {
@@ -337,11 +238,11 @@ app.get('/api/sales', authenticateToken, async (req, res) => {
 });
 
 // Save ALL sales data, including webinar leads and employee batches
-app.post('/api/sales', authenticateToken, async (req, res) => {
+app.post('/api/sales', async (req, res) => {
   try {
     const { 
       employees, 
-      employeeOrder,  // Receive employee order from frontend
+      employeeOrder,  // FIX: Receive employee order from frontend
       dailyBookings, 
       dailyBookingsByYear, 
       leadSummary, 
@@ -353,18 +254,10 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
       webinarLeads, 
       employeeBatches, 
       batchToMonthMapping, 
-      webinarData,
-      webinarPerformanceData
+      webinarData 
     } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
-
-    // Validate data structure
-    validateDataStructure(employees);
-    validateDataStructure(dailyBookings);
-    validateDataStructure(leadSummary);
-    validateDataStructure(monthlyLeads);
-    validateDataStructure(batchData);
 
     const empIdMap = {};
     for (const empName of employees) {
@@ -381,7 +274,6 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
     
     const upsertData = async (table, data, conflictColumns) => { 
       if (data.length === 0) return;
-      logOperation(`Upserting ${table}`, data);
       const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
       if (error) throw error; 
     };
@@ -404,7 +296,7 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
             }); 
           } 
         } 
-      } 
+      }
     }
     
     if (dailyBookingsByYear) {
@@ -472,11 +364,11 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
           monthlyLeadsToUpsert.push({ 
             employee_id: empId, 
             month: month, 
-            value: monthlyLeads[empName][month] || 0,  // Fixed: emp.name → empName
+            value: monthlyLeads[empName][month] || 0,
             year: "2026"
           }); 
         } 
-      } 
+      }
     }
     
     if (monthlyLeadsByYear) {
@@ -540,7 +432,8 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
       }
     }
 
-    // --- Save Employee Order into custom_headers as a special entry ---
+    // --- FIX: Save Employee Order into custom_headers as a special entry ---
+    // This MUST come AFTER the custom headers save above (which deletes all rows)
     if (employeeOrder && Array.isArray(employeeOrder)) {
       const { error: orderError } = await supabase.from('custom_headers').insert({
         table_name: '_employeeOrder',
@@ -665,27 +558,6 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
       }
     }
 
-    // --- Save Webinar Performance Data ---
-    if (webinarPerformanceData) {
-      const webinarPerformanceToUpsert = [];
-      for (const year in webinarPerformanceData) {
-        for (const empName in webinarPerformanceData[year]) {
-          const empId = empIdMap[empName];
-          if (!empId) continue;
-          for (let month = 0; month < 12; month++) {
-            webinarPerformanceToUpsert.push({
-              employee_id: empId,
-              employee_name: empName,
-              year: year,
-              month: month,
-              lead_count: webinarPerformanceData[year][empName][month] || 0
-            });
-          }
-        }
-      }
-      await upsertData('webinar_performance', webinarPerformanceToUpsert, 'employee_id, year, month');
-    }
-
     console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
     res.json({ success: true });
 
@@ -696,7 +568,7 @@ app.post('/api/sales', authenticateToken, async (req, res) => {
 });
 
 // Add new employee
-app.post('/api/employee', authenticateToken, async (req, res) => {
+app.post('/api/employee', async (req, res) => {
   try {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Employee name is required' });
@@ -713,7 +585,7 @@ app.post('/api/employee', authenticateToken, async (req, res) => {
 });
 
 // Remove employee and all associated data
-app.delete('/api/employee/:name', authenticateToken, async (req, res) => {
+app.delete('/api/employee/:name', async (req, res) => {
   try {
     const { name } = req.params;
     
@@ -733,7 +605,7 @@ app.delete('/api/employee/:name', authenticateToken, async (req, res) => {
     
     const employeeId = employee.id;
     
-    // Clean up the employee from the saved employeeOrder
+    // FIX: Also clean up the employee from the saved employeeOrder
     const { data: orderRow } = await supabase
       .from('custom_headers')
       .select('id, headers')
@@ -779,17 +651,6 @@ app.delete('/api/employee/:name', authenticateToken, async (req, res) => {
       details: error.message 
     });
   }
-});
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
 });
 
 // Start Server
