@@ -3,6 +3,8 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 const path = require('path');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
 
 // --- App Initialization ---
 const app = express();
@@ -12,10 +14,28 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use('/api/', limiter);
+
 // Initialize Supabase client
 const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+// --- Helper Functions ---
+function validateDataStructure(data) {
+  if (!data || typeof data !== 'object') {
+    throw new Error('Invalid data structure');
+  }
+}
+
+function logOperation(operation, data) {
+  console.log(`>>> [DEBUG] ${operation} with ${data.length} records`);
+}
 
 // --- API Routes ---
 
@@ -258,8 +278,19 @@ app.get('/api/sales', async (req, res) => {
 });
 
 // Save ALL sales data, including webinar leads and employee batches
-app.post('/api/sales', async (req, res) => {
+app.post('/api/sales', [
+  body('employees').isArray().withMessage('Employees must be an array'),
+  body('dailyBookings').isObject().withMessage('Daily bookings must be an object'),
+  body('leadSummary').isObject().withMessage('Lead summary must be an object'),
+  body('monthlyLeads').isObject().withMessage('Monthly leads must be an object'),
+  body('batchData').isObject().withMessage('Batch data must be an object')
+], async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
     const { 
       employees, 
       employeeOrder,  // Receive employee order from frontend
@@ -280,6 +311,13 @@ app.post('/api/sales', async (req, res) => {
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
 
+    // Validate data structure
+    validateDataStructure(employees);
+    validateDataStructure(dailyBookings);
+    validateDataStructure(leadSummary);
+    validateDataStructure(monthlyLeads);
+    validateDataStructure(batchData);
+
     const empIdMap = {};
     for (const empName of employees) {
       const { data: existingEmp, error: empError } = await supabase.from('employees').select('id').eq('name', empName).single();
@@ -295,6 +333,7 @@ app.post('/api/sales', async (req, res) => {
     
     const upsertData = async (table, data, conflictColumns) => { 
       if (data.length === 0) return;
+      logOperation(`Upserting ${table}`, data);
       const { error } = await supabase.from(table).upsert(data, { onConflict: conflictColumns }); 
       if (error) throw error; 
     };
@@ -385,7 +424,7 @@ app.post('/api/sales', async (req, res) => {
           monthlyLeadsToUpsert.push({ 
             employee_id: empId, 
             month: month, 
-            value: monthlyLeads[emp.name][month] || 0,
+            value: monthlyLeads[empName][month] || 0,  // Fixed: emp.name → empName
             year: "2026"
           }); 
         } 
@@ -528,7 +567,7 @@ app.post('/api/sales', async (req, res) => {
         if (!empId || !employeeBatches[empName]) continue;
         batchAssignments.push({ 
           employee_id: empId, 
-          batch_id: employeeBatches[emp.name] 
+          batch_id: employeeBatches[empName] 
         });
       }
       if (batchAssignments.length > 0) {
@@ -692,6 +731,17 @@ app.delete('/api/employee/:name', async (req, res) => {
       details: error.message 
     });
   }
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!' });
 });
 
 // Start Server
