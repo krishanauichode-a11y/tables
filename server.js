@@ -13,13 +13,14 @@ app.use(cors());
 app.use(express.json());
 
 // Initialize Supabase client
+// NOTE: In production, store these keys in environment variables (.env)
 const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- API Routes ---
 
-// Get ALL sales data, including webinar leads and custom headers
+// Get ALL sales data, including webinar leads, performance, and custom headers
 app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
@@ -35,7 +36,8 @@ app.get('/api/sales', async (req, res) => {
       { data: webinarLeads, error: webinarError },
       { data: employeeBatches, error: empBatchesError },
       { data: batchMonthMapping, error: batchMappingError },
-      { data: webinarData, error: webinarDataError }
+      { data: webinarData, error: webinarDataError },
+      { data: webinarPerformanceData, error: webinarPerfError } // NEW ADDED
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -48,7 +50,8 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('webinar_leads').select('*'),
       supabase.from('employee_batches').select('*'),
       supabase.from('batch_month_mapping').select('*').order('batch_index'),
-      supabase.from('webinar_data').select('*')
+      supabase.from('webinar_data').select('*'),
+      supabase.from('webinar_performance').select('*') // NEW ADDED
     ]);
 
     // Check for all errors
@@ -61,12 +64,13 @@ app.get('/api/sales', async (req, res) => {
     if (empBatchesError) throw empBatchesError;
     if (batchMappingError) throw batchMappingError;
     if (webinarDataError) throw webinarDataError;
+    if (webinarPerfError) throw webinarPerfError; // NEW ADDED
     
     console.log(">>> [DEBUG] Data fetched. Formatting for frontend.");
 
     const formattedData = {
       employees: employees.map(e => e.name),
-      employeeOrder: null, // FIX: Will be populated from saved order
+      employeeOrder: null, 
       dailyBookings: {}, 
       dailyBookingsByYear: {},
       leadSummary: {},
@@ -84,7 +88,8 @@ app.get('/api/sales', async (req, res) => {
       webinarLeads: {},
       employeeBatches: {},
       batchToMonthMapping: [],
-      webinarData: {}
+      webinarData: {},
+      webinarPerformanceData: {} // NEW ADDED
     };
 
     // Process batch-to-month mappings with year
@@ -105,11 +110,9 @@ app.get('/api/sales', async (req, res) => {
     });
 
     // Process custom headers
-    // FIX: Extract employeeOrder from custom_headers, separate from real headers
     if (customHeaders && customHeaders.length > 0) {
       customHeaders.forEach(header => {
         if (header.table_name === '_employeeOrder') {
-          // This is the saved employee order — return it as employeeOrder
           formattedData.employeeOrder = header.headers;
         } else if (header.table_name && header.headers) {
           formattedData.customHeaders[header.table_name] = header.headers;
@@ -229,6 +232,28 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
+    // Process Webinar Performance Data (NEW)
+    if (webinarPerformanceData && webinarPerformanceData.length > 0) {
+      webinarPerformanceData.forEach(item => {
+        // Match the employee ID to the name to ensure consistency
+        const empObj = employees.find(e => e.id === item.employee_id);
+        // Fallback to item.employee_name if the join fails (though it shouldn't)
+        const empName = empObj ? empObj.name : item.employee_name;
+
+        if (empName) {
+          const year = item.year || "2026";
+          if (!formattedData.webinarPerformanceData[year]) {
+            formattedData.webinarPerformanceData[year] = {};
+          }
+          if (!formattedData.webinarPerformanceData[year][empName]) {
+            formattedData.webinarPerformanceData[year][empName] = Array(12).fill(0);
+          }
+          // Map 'lead_count' from your DB to the array index
+          formattedData.webinarPerformanceData[year][empName][item.month] = item.lead_count;
+        }
+      });
+    }
+
     console.log(">>> [DEBUG] Data formatted. Sending response.");
     res.json(formattedData);
   } catch (error) {
@@ -237,12 +262,12 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-// Save ALL sales data, including webinar leads and employee batches
+// Save ALL sales data, including webinar leads, performance, and employee batches
 app.post('/api/sales', async (req, res) => {
   try {
     const { 
       employees, 
-      employeeOrder,  // FIX: Receive employee order from frontend
+      employeeOrder, 
       dailyBookings, 
       dailyBookingsByYear, 
       leadSummary, 
@@ -254,7 +279,8 @@ app.post('/api/sales', async (req, res) => {
       webinarLeads, 
       employeeBatches, 
       batchToMonthMapping, 
-      webinarData 
+      webinarData,
+      webinarPerformanceData // NEW ADDED
     } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
@@ -432,8 +458,7 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- FIX: Save Employee Order into custom_headers as a special entry ---
-    // This MUST come AFTER the custom headers save above (which deletes all rows)
+    // --- Save Employee Order ---
     if (employeeOrder && Array.isArray(employeeOrder)) {
       const { error: orderError } = await supabase.from('custom_headers').insert({
         table_name: '_employeeOrder',
@@ -558,6 +583,42 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
+    // --- Save Webinar Performance Data (NEW) ---
+    if (webinarPerformanceData) {
+      // Clean up existing data for these employees to avoid duplicate key errors
+      await supabase.from('webinar_performance').delete().in('employee_id', employeeIds);
+
+      const perfDataToInsert = [];
+      const perfData = webinarPerformanceData;
+
+      for (const year in perfData) {
+        for (const empName in perfData[year]) {
+          const empId = empIdMap[empName];
+          if (!empId) continue;
+
+          const monthlyData = perfData[year][empName];
+          if (Array.isArray(monthlyData)) {
+            monthlyData.forEach((val, monthIndex) => {
+              // Map data to your specific columns: employee_id, employee_name, year, month, lead_count
+              perfDataToInsert.push({
+                employee_id: empId,
+                employee_name: empName, // Saving the name as per your schema
+                year: year,
+                month: monthIndex,
+                lead_count: val || 0
+              });
+            });
+          }
+        }
+      }
+
+      if (perfDataToInsert.length > 0) {
+        const { error: perfInsertError } = await supabase.from('webinar_performance').insert(perfDataToInsert);
+        if (perfInsertError) throw perfInsertError;
+        console.log(`>>> [SAVE-DEBUG] Saved ${perfDataToInsert.length} webinar performance records.`);
+      }
+    }
+
     console.log(">>> [SAVE-DEBUG] All save operations completed successfully.");
     res.json({ success: true });
 
@@ -605,7 +666,7 @@ app.delete('/api/employee/:name', async (req, res) => {
     
     const employeeId = employee.id;
     
-    // FIX: Also clean up the employee from the saved employeeOrder
+    // Clean up the employee from the saved employeeOrder
     const { data: orderRow } = await supabase
       .from('custom_headers')
       .select('id, headers')
@@ -627,7 +688,8 @@ app.delete('/api/employee/:name', async (req, res) => {
       supabase.from('lead_summary').delete().eq('employee_id', employeeId),
       supabase.from('monthly_leads').delete().eq('employee_id', employeeId),
       supabase.from('batch_leads').delete().eq('employee_id', employeeId),
-      supabase.from('monthly_batch_admin_leads').delete().eq('employee_id', employeeId)
+      supabase.from('monthly_batch_admin_leads').delete().eq('employee_id', employeeId),
+      supabase.from('webinar_performance').delete().eq('employee_id', employeeId) // NEW ADDED
     ];
     
     for (const operation of deleteOperations) {
