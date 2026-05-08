@@ -13,7 +13,6 @@ app.use(cors());
 app.use(express.json());
 
 // Initialize Supabase client
-// NOTE: In production, use environment variables for the URL and Key
 const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -38,7 +37,7 @@ app.get('/api/sales', async (req, res) => {
       { data: batchMonthMapping, error: batchMappingError },
       { data: webinarData, error: webinarDataError },
       { data: webinarPerformanceData, error: webinarPerfError },
-      { data: dailyWebinarPerformance, error: dailyWebinarPerfError } // Fetch Daily Webinar Data
+      { data: dailyWebinarPerformance, error: dailyWebinarPerfError }
     ] = await Promise.all([
       supabase.from('employees').select('*'),
       supabase.from('daily_bookings').select('*'),
@@ -53,10 +52,9 @@ app.get('/api/sales', async (req, res) => {
       supabase.from('batch_month_mapping').select('*').order('batch_index'),
       supabase.from('webinar_data').select('*'),
       supabase.from('webinar_performance').select('*'),
-      supabase.from('daily_webinar_performance').select('*') // NEW
+      supabase.from('daily_webinar_performance').select('*')
     ]);
 
-    // Check for errors
     if (empError) throw empError; if (dailyError) throw dailyError;
     if (summaryError) throw summaryError; if (monthlyError) throw monthlyError;
     if (batchError) throw batchError; if (batchesError) throw batchesError;
@@ -93,7 +91,7 @@ app.get('/api/sales', async (req, res) => {
       batchToMonthMapping: [],
       webinarData: {},
       webinarPerformanceData: {},
-      webinarDailyData: {} // MATCHES FRONTEND VARIABLE NAME
+      webinarDailyData: {}
     };
 
     // Process batch-to-month mappings
@@ -253,20 +251,22 @@ app.get('/api/sales', async (req, res) => {
       });
     }
 
-    // Process Daily Webinar Performance Data (MATCHES FRONTEND VARIABLE NAME)
-    formattedData.webinarDailyData = {}; // <--- FIXED VARIABLE NAME
+    // Process Daily Webinar Performance Data
+    formattedData.webinarDailyData = {}; 
     employees.forEach(emp => {
-      formattedData.webinarDailyData[emp.name] = {};
       const empDailyWebinar = dailyWebinarPerformance.filter(d => d.employee_id === emp.id);
       empDailyWebinar.forEach(entry => {
         const year = entry.year || "2026";
-        if (!formattedData.webinarDailyData[emp.name][year]) {
-          formattedData.webinarDailyData[emp.name][year] = {};
+        if (!formattedData.webinarDailyData[year]) {
+          formattedData.webinarDailyData[year] = {};
         }
-        if (!formattedData.webinarDailyData[emp.name][year][entry.month]) {
-          formattedData.webinarDailyData[emp.name][year][entry.month] = {};
+        if (!formattedData.webinarDailyData[year][emp.name]) {
+          formattedData.webinarDailyData[year][emp.name] = {};
         }
-        formattedData.webinarDailyData[emp.name][year][entry.month][entry.day] = entry.value;
+        if (!formattedData.webinarDailyData[year][emp.name][entry.month]) {
+          formattedData.webinarDailyData[year][emp.name][entry.month] = {};
+        }
+        formattedData.webinarDailyData[year][emp.name][entry.month][entry.day] = entry.value;
       });
     });
 
@@ -297,7 +297,7 @@ app.post('/api/sales', async (req, res) => {
       batchToMonthMapping, 
       webinarData,
       webinarPerformanceData,
-      webinarDailyData // <--- FIXED VARIABLE NAME TO MATCH FRONTEND
+      webinarDailyData 
     } = req.body;
     
     console.log(">>> [SAVE-DEBUG] Received request to save data.");
@@ -632,24 +632,27 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- Save Daily Webinar Performance Data (FIXED VARIABLE NAME) ---
+    // --- Save Daily Webinar Performance Data (FIXED LOOP LOGIC) ---
     if (webinarDailyData) {
+      // 1. Delete existing data for these employees to prevent duplicates/conflicts
       await supabase.from('daily_webinar_performance').delete().in('employee_id', employeeIds);
 
       const dailyWebinarToUpsert = [];
-      for (const empName in webinarDailyData) { // <--- FIXED VARIABLE NAME
-        const empId = empIdMap[empName];
-        if (!empId) continue;
-        
-        for (const year in webinarDailyData[empName]) { // <--- FIXED VARIABLE NAME
-          for (const month in webinarDailyData[empName][year]) { // <--- FIXED VARIABLE NAME
-            for (const day in webinarDailyData[empName][year][month]) { // <--- FIXED VARIABLE NAME
+      
+      // 2. FIX: Loop by YEAR first (matches Frontend structure: Year -> Emp -> Month -> Day)
+      for (const year in webinarDailyData) { 
+        for (const empName in webinarDailyData[year]) { 
+          const empId = empIdMap[empName];
+          if (!empId) continue; 
+          
+          for (const month in webinarDailyData[year][empName]) { 
+            for (const day in webinarDailyData[year][empName][month]) { 
               dailyWebinarToUpsert.push({
                 employee_id: empId,
                 year: parseInt(year),
                 month: parseInt(month),
                 day: parseInt(day),
-                value: webinarDailyData[empName][year][month][day] // <--- FIXED VARIABLE NAME
+                value: webinarDailyData[year][empName][month][day]
               });
             }
           }
@@ -733,7 +736,7 @@ app.delete('/api/employee/:name', async (req, res) => {
       supabase.from('batch_leads').delete().eq('employee_id', employeeId),
       supabase.from('monthly_batch_admin_leads').delete().eq('employee_id', employeeId),
       supabase.from('webinar_performance').delete().eq('employee_id', employeeId),
-      supabase.from('daily_webinar_performance').delete().eq('employee_id', employeeId) // NEW
+      supabase.from('daily_webinar_performance').delete().eq('employee_id', employeeId)
     ];
     
     for (const operation of deleteOperations) {
