@@ -17,11 +17,57 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// ================= 7 NEW COLUMNS FOR 4TH CAROUSEL =================
-const ADDITIONAL_BATCH_COLUMNS = ["NEW COL 1", "NEW COL 2", "NEW COL 3", "NEW COL 4", "NEW COL 5", "NEW COL 6", "NEW COL 7"];
+// ================= 6 NEW COLUMNS FOR 4TH CAROUSEL =================
+const ADDITIONAL_BATCH_COLUMNS = [
+  "18 August - Pune",
+  "6 September - Hindi",
+  "30 September - Hindi Basic Online",
+  "2 October - Hindi Advance Online",
+  "24th November - Pune",
+  "15 December - Pune"
+];
+
+// Old placeholder columns to remove
+const OLD_PLACEHOLDER_COLUMNS = ["NEW COL 1", "NEW COL 2", "NEW COL 3", "NEW COL 4", "NEW COL 5", "NEW COL 6", "NEW COL 7"];
+
+async function cleanupOldPlaceholderBatches() {
+  try {
+    for (const colName of OLD_PLACEHOLDER_COLUMNS) {
+      const batchId = 'new_col_' + colName.replace(/\s+/g, '_').toLowerCase();
+      
+      // Delete batch leads for this batch first
+      const { error: deleteLeadsError } = await supabase
+        .from('batch_leads')
+        .delete()
+        .eq('batch_id', batchId);
+      
+      if (deleteLeadsError) {
+        console.warn(`>>> [cleanupOldPlaceholderBatches] Warning deleting leads for "${colName}":`, deleteLeadsError.message);
+      }
+      
+      // Delete the batch itself
+      const { data: deleted, error: deleteError } = await supabase
+        .from('batches')
+        .delete()
+        .eq('id', batchId)
+        .select();
+      
+      if (deleteError) {
+        console.warn(`>>> [cleanupOldPlaceholderBatches] Warning deleting "${colName}":`, deleteError.message);
+      } else if (deleted && deleted.length > 0) {
+        console.log(`>>> [cleanupOldPlaceholderBatches] Removed old batch: "${colName}"`);
+      }
+    }
+  } catch (error) {
+    console.error('>>> [cleanupOldPlaceholderBatches] Error:', error.message);
+  }
+}
 
 async function ensureAdditionalBatches() {
   try {
+    // First clean up old placeholder batches
+    await cleanupOldPlaceholderBatches();
+
     for (const colName of ADDITIONAL_BATCH_COLUMNS) {
       // Check if batch already exists by label
       const { data: existing, error: checkError } = await supabase
@@ -57,7 +103,7 @@ async function ensureAdditionalBatches() {
     console.error('>>> [ensureAdditionalBatches] Error:', error.message);
   }
 }
-// ================= END 7 NEW COLUMNS =================
+// ================= END 6 NEW COLUMNS =================
 
 // --- API Routes ---
 
