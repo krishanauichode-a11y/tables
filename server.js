@@ -632,12 +632,14 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- Save Daily Webinar Performance Data ---
+    // --- Save Daily Webinar Performance Data (FIXED LOOP LOGIC) ---
     if (webinarDailyData) {
+      // 1. Delete existing data for these employees to prevent duplicates/conflicts
       await supabase.from('daily_webinar_performance').delete().in('employee_id', employeeIds);
 
       const dailyWebinarToUpsert = [];
       
+      // 2. FIX: Loop by YEAR first (matches Frontend structure: Year -> Emp -> Month -> Day)
       for (const year in webinarDailyData) { 
         for (const empName in webinarDailyData[year]) { 
           const empId = empIdMap[empName];
@@ -658,6 +660,7 @@ app.post('/api/sales', async (req, res) => {
       }
 
       if (dailyWebinarToUpsert.length > 0) {
+        // Upsert using the unique constraint we created in SQL
         await upsertData('daily_webinar_performance', dailyWebinarToUpsert, 'employee_id, year, month, day');
         console.log(`>>> [SAVE-DEBUG] Saved ${dailyWebinarToUpsert.length} daily webinar performance records.`);
       }
@@ -689,7 +692,7 @@ app.post('/api/employee', async (req, res) => {
   }
 });
 
-// Remove employee (HISTORICAL DATA PRESERVED)
+// Remove employee
 app.delete('/api/employee/:name', async (req, res) => {
   try {
     const { name } = req.params;
@@ -698,7 +701,6 @@ app.delete('/api/employee/:name', async (req, res) => {
       return res.status(400).json({ error: 'Employee name is required' });
     }
     
-    // Check if employee exists
     const { data: employee, error: empError } = await supabase
       .from('employees')
       .select('id')
@@ -711,7 +713,7 @@ app.delete('/api/employee/:name', async (req, res) => {
     
     const employeeId = employee.id;
     
-    // --- Step 1: Remove from employee order list ---
+    // Clean up employee order
     const { data: orderRow } = await supabase
       .from('custom_headers')
       .select('id, headers')
@@ -724,22 +726,24 @@ app.delete('/api/employee/:name', async (req, res) => {
         .from('custom_headers')
         .update({ headers: updatedOrder })
         .eq('id', orderRow.id);
-      console.log(`>>> [DEBUG] Removed "${name}" from employee order.`);
     }
     
-    // --- Step 2: Remove current batch assignment only ---
-    const { error: batchAssignError } = await supabase
-      .from('employee_batches')
-      .delete()
-      .eq('employee_id', employeeId);
+    const deleteOperations = [
+      supabase.from('employee_batches').delete().eq('employee_id', employeeId),
+      supabase.from('daily_bookings').delete().eq('employee_id', employeeId),
+      supabase.from('lead_summary').delete().eq('employee_id', employeeId),
+      supabase.from('monthly_leads').delete().eq('employee_id', employeeId),
+      supabase.from('batch_leads').delete().eq('employee_id', employeeId),
+      supabase.from('monthly_batch_admin_leads').delete().eq('employee_id', employeeId),
+      supabase.from('webinar_performance').delete().eq('employee_id', employeeId),
+      supabase.from('daily_webinar_performance').delete().eq('employee_id', employeeId)
+    ];
     
-    if (batchAssignError) {
-      console.warn(`>>> [DEBUG] Warning: Could not remove batch assignment: ${batchAssignError.message}`);
-    } else {
-      console.log(`>>> [DEBUG] Removed batch assignment for "${name}".`);
+    for (const operation of deleteOperations) {
+      const { error } = await operation;
+      if (error) throw error;
     }
     
-    // --- Step 3: Delete the employee record ---
     const { error: deleteError } = await supabase
       .from('employees')
       .delete()
@@ -747,24 +751,7 @@ app.delete('/api/employee/:name', async (req, res) => {
       
     if (deleteError) throw deleteError;
     
-    // ============================================
-    // 🔒 HISTORICAL DATA PRESERVED - NOT DELETED:
-    // ============================================
-    // ✅ daily_bookings         - Past daily booking data kept
-    // ✅ lead_summary            - Past lead summaries kept
-    // ✅ monthly_leads           - Past monthly totals kept
-    // ✅ batch_leads             - Past batch contributions kept
-    // ✅ monthly_batch_admin_leads - Past admin data kept
-    // ✅ webinar_performance     - Past webinar data kept
-    // ✅ daily_webinar_performance - Past daily webinar data kept
-    // ============================================
-    
-    console.log(`>>> [DEBUG] Employee "${name}" removed. All historical data preserved.`);
-    
-    res.json({ 
-      success: true, 
-      message: `Employee "${name}" removed from active list. All historical data has been preserved.` 
-    });
+    res.json({ success: true, message: `Employee "${name}" and all associated data have been removed` });
     
   } catch (error) {
     console.error('Error removing employee:', error);
@@ -779,4 +766,3 @@ app.delete('/api/employee/:name', async (req, res) => {
 app.listen(port, () => { 
   console.log(`Server is running on http://localhost:${port}`); 
 });
-
