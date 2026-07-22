@@ -17,104 +17,12 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// ================= 6 NEW COLUMNS FOR 4TH CAROUSEL =================
-const ADDITIONAL_BATCH_COLUMNS = [
-  "18 August - Pune",
-  "6 September - Hindi",
-  "30 September - Hindi Basic Online",
-  "2 October - Hindi Advance Online",
-  "24th November - Pune",
-  "15 December - Pune"
-];
-
-// Old placeholder columns to remove
-const OLD_PLACEHOLDER_COLUMNS = ["NEW COL 1", "NEW COL 2", "NEW COL 3", "NEW COL 4", "NEW COL 5", "NEW COL 6", "NEW COL 7"];
-
-async function cleanupOldPlaceholderBatches() {
-  try {
-    for (const colName of OLD_PLACEHOLDER_COLUMNS) {
-      const batchId = 'new_col_' + colName.replace(/\s+/g, '_').toLowerCase();
-      
-      // Delete batch leads for this batch first
-      const { error: deleteLeadsError } = await supabase
-        .from('batch_leads')
-        .delete()
-        .eq('batch_id', batchId);
-      
-      if (deleteLeadsError) {
-        console.warn(`>>> [cleanupOldPlaceholderBatches] Warning deleting leads for "${colName}":`, deleteLeadsError.message);
-      }
-      
-      // Delete the batch itself
-      const { data: deleted, error: deleteError } = await supabase
-        .from('batches')
-        .delete()
-        .eq('id', batchId)
-        .select();
-      
-      if (deleteError) {
-        console.warn(`>>> [cleanupOldPlaceholderBatches] Warning deleting "${colName}":`, deleteError.message);
-      } else if (deleted && deleted.length > 0) {
-        console.log(`>>> [cleanupOldPlaceholderBatches] Removed old batch: "${colName}"`);
-      }
-    }
-  } catch (error) {
-    console.error('>>> [cleanupOldPlaceholderBatches] Error:', error.message);
-  }
-}
-
-async function ensureAdditionalBatches() {
-  try {
-    // First clean up old placeholder batches
-    await cleanupOldPlaceholderBatches();
-
-    for (const colName of ADDITIONAL_BATCH_COLUMNS) {
-      // Check if batch already exists by label
-      const { data: existing, error: checkError } = await supabase
-        .from('batches')
-        .select('id')
-        .eq('label', colName)
-        .maybeSingle();
-
-      if (checkError) {
-        console.warn(`>>> [ensureAdditionalBatches] Warning checking "${colName}":`, checkError.message);
-        continue;
-      }
-
-      if (!existing) {
-        // Generate a simple deterministic ID from the column name
-        const batchId = 'new_col_' + colName.replace(/\s+/g, '_').toLowerCase();
-        const { data: inserted, error: insertError } = await supabase
-          .from('batches')
-          .insert({ id: batchId, label: colName, thc: 0 })
-          .select()
-          .single();
-
-        if (insertError) {
-          console.warn(`>>> [ensureAdditionalBatches] Warning inserting "${colName}":`, insertError.message);
-        } else {
-          console.log(`>>> [ensureAdditionalBatches] Created batch: "${colName}" with id: ${batchId}`);
-        }
-      } else {
-        console.log(`>>> [ensureAdditionalBatches] Batch already exists: "${colName}"`);
-      }
-    }
-  } catch (error) {
-    console.error('>>> [ensureAdditionalBatches] Error:', error.message);
-  }
-}
-// ================= END 6 NEW COLUMNS =================
-
 // --- API Routes ---
 
 // Get ALL sales data
 app.get('/api/sales', async (req, res) => {
   try {
     console.log(">>> [DEBUG] Fetching data from Supabase...");
-
-    // Ensure 7 additional batch columns exist before fetching
-    await ensureAdditionalBatches();
-
     const [
       { data: employees, error: empError },
       { data: dailyBookings, error: dailyError },
@@ -720,7 +628,7 @@ app.post('/api/sales', async (req, res) => {
       if (perfDataToInsert.length > 0) {
         const { error: perfInsertError } = await supabase.from('webinar_performance').insert(perfDataToInsert);
         if (perfInsertError) throw perfInsertError;
-        console.log(">>> [SAVE-DEBUG] Saved " + perfDataToInsert.length + " webinar performance records.");
+        console.log(`>>> [SAVE-DEBUG] Saved ${perfDataToInsert.length} webinar performance records.`);
       }
     }
 
@@ -751,7 +659,7 @@ app.post('/api/sales', async (req, res) => {
 
       if (dailyWebinarToUpsert.length > 0) {
         await upsertData('daily_webinar_performance', dailyWebinarToUpsert, 'employee_id, year, month, day');
-        console.log(">>> [SAVE-DEBUG] Saved " + dailyWebinarToUpsert.length + " daily webinar performance records.");
+        console.log(`>>> [SAVE-DEBUG] Saved ${dailyWebinarToUpsert.length} daily webinar performance records.`);
       }
     }
 
@@ -816,7 +724,7 @@ app.delete('/api/employee/:name', async (req, res) => {
         .from('custom_headers')
         .update({ headers: updatedOrder })
         .eq('id', orderRow.id);
-      console.log('>>> [DEBUG] Removed "' + name + '" from employee order.');
+      console.log(`>>> [DEBUG] Removed "${name}" from employee order.`);
     }
     
     // --- Step 2: Remove current batch assignment only ---
@@ -826,9 +734,9 @@ app.delete('/api/employee/:name', async (req, res) => {
       .eq('employee_id', employeeId);
     
     if (batchAssignError) {
-      console.warn(">>> [DEBUG] Warning: Could not remove batch assignment: " + batchAssignError.message);
+      console.warn(`>>> [DEBUG] Warning: Could not remove batch assignment: ${batchAssignError.message}`);
     } else {
-      console.log('>>> [DEBUG] Removed batch assignment for "' + name + '".');
+      console.log(`>>> [DEBUG] Removed batch assignment for "${name}".`);
     }
     
     // --- Step 3: Delete the employee record ---
@@ -840,22 +748,22 @@ app.delete('/api/employee/:name', async (req, res) => {
     if (deleteError) throw deleteError;
     
     // ============================================
-    // HISTORICAL DATA PRESERVED - NOT DELETED:
+    // 🔒 HISTORICAL DATA PRESERVED - NOT DELETED:
     // ============================================
-    // daily_bookings         - Past daily booking data kept
-    // lead_summary            - Past lead summaries kept
-    // monthly_leads           - Past monthly totals kept
-    // batch_leads             - Past batch contributions kept
-    // monthly_batch_admin_leads - Past admin data kept
-    // webinar_performance     - Past webinar data kept
-    // daily_webinar_performance - Past daily webinar data kept
+    // ✅ daily_bookings         - Past daily booking data kept
+    // ✅ lead_summary            - Past lead summaries kept
+    // ✅ monthly_leads           - Past monthly totals kept
+    // ✅ batch_leads             - Past batch contributions kept
+    // ✅ monthly_batch_admin_leads - Past admin data kept
+    // ✅ webinar_performance     - Past webinar data kept
+    // ✅ daily_webinar_performance - Past daily webinar data kept
     // ============================================
     
-    console.log('>>> [DEBUG] Employee "' + name + '" removed. All historical data preserved.');
+    console.log(`>>> [DEBUG] Employee "${name}" removed. All historical data preserved.`);
     
     res.json({ 
       success: true, 
-      message: 'Employee "' + name + '" removed from active list. All historical data has been preserved.' 
+      message: `Employee "${name}" removed from active list. All historical data has been preserved.` 
     });
     
   } catch (error) {
@@ -869,5 +777,5 @@ app.delete('/api/employee/:name', async (req, res) => {
 
 // Start Server
 app.listen(port, () => { 
-  console.log("Server is running on http://localhost:" + port); 
+  console.log(`Server is running on http://localhost:${port}`); 
 });
