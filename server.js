@@ -17,39 +17,6 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// ========================================================================
-// Auto-insert 6 new batch-month mappings on startup (skip if exists)
-// ========================================================================
-async function insertNewBatches() {
-  const newBatches = [
-    { batch_index: 3, batch_name: '18 August Pune', month_index: 7, month_name: 'August', year: '2026' },
-    { batch_index: 4, batch_name: '6 September Thane', month_index: 8, month_name: 'September', year: '2026' },
-    { batch_index: 5, batch_name: '30 September Basic Hindi Online', month_index: 8, month_name: 'September', year: '2026' },
-    { batch_index: 6, batch_name: '2 October Advance Hindi Online', month_index: 9, month_name: 'October', year: '2026' },
-    { batch_index: 7, batch_name: '24 November Pune Marathi', month_index: 10, month_name: 'November', year: '2026' },
-    { batch_index: 8, batch_name: '15 December Pune Marathi', month_index: 11, month_name: 'December', year: '2026' }
-  ];
-
-  for (const batch of newBatches) {
-    const { data: existing } = await supabase
-      .from('batch_month_mapping')
-      .select('id')
-      .eq('batch_name', batch.batch_name)
-      .maybeSingle();
-
-    if (!existing) {
-      const { error } = await supabase.from('batch_month_mapping').insert(batch);
-      if (error) {
-        console.log(`>>> [INIT] Skipped "${batch.batch_name}": ${error.message}`);
-      } else {
-        console.log(`>>> [INIT] Inserted batch: "${batch.batch_name}"`);
-      }
-    } else {
-      console.log(`>>> [INIT] Already exists: "${batch.batch_name}"`);
-    }
-  }
-}
-
 // --- API Routes ---
 
 // Get ALL sales data
@@ -665,12 +632,14 @@ app.post('/api/sales', async (req, res) => {
       }
     }
 
-    // --- Save Daily Webinar Performance Data ---
+    // --- Save Daily Webinar Performance Data (FIXED LOOP LOGIC) ---
     if (webinarDailyData) {
+      // 1. Delete existing data for these employees to prevent duplicates/conflicts
       await supabase.from('daily_webinar_performance').delete().in('employee_id', employeeIds);
 
       const dailyWebinarToUpsert = [];
       
+      // 2. FIX: Loop by YEAR first (matches Frontend structure: Year -> Emp -> Month -> Day)
       for (const year in webinarDailyData) { 
         for (const empName in webinarDailyData[year]) { 
           const empId = empIdMap[empName];
@@ -691,6 +660,7 @@ app.post('/api/sales', async (req, res) => {
       }
 
       if (dailyWebinarToUpsert.length > 0) {
+        // Upsert using the unique constraint we created in SQL
         await upsertData('daily_webinar_performance', dailyWebinarToUpsert, 'employee_id, year, month, day');
         console.log(`>>> [SAVE-DEBUG] Saved ${dailyWebinarToUpsert.length} daily webinar performance records.`);
       }
@@ -792,14 +762,7 @@ app.delete('/api/employee/:name', async (req, res) => {
   }
 });
 
-// Start Server — runs insertNewBatches() first
-insertNewBatches().then(() => {
-  app.listen(port, () => { 
-    console.log(`Server is running on http://localhost:${port}`); 
-  });
-}).catch(err => {
-  console.error(">>> [INIT] Batch insert warning:", err.message);
-  app.listen(port, () => { 
-    console.log(`Server is running on http://localhost:${port}`); 
-  });
+// Start Server
+app.listen(port, () => { 
+  console.log(`Server is running on http://localhost:${port}`); 
 });
