@@ -17,21 +17,6 @@ const supabaseUrl = 'https://ihyogsvmprdwubfqhzls.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloeW9nc3ZtcHJkd3ViZnFoemxzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAxODk3NjMsImV4cCI6MjA4NTc2NTc2M30.uudrEHr5d5ntqfB3p8aRusRwE3cI5bh65sxt7BF2yQU';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- Auto-Migration: Add year column to batches ---
-(async () => {
-  try {
-    const { error } = await supabase.from('batches').select('id, year').limit(1);
-    if (error && error.code === 'PGRST204') {
-      console.log(">>> [MIGRATION] 'year' column missing on batches. Please run in Supabase SQL Editor:");
-      console.log(">>> [MIGRATION] ALTER TABLE batches ADD COLUMN year TEXT DEFAULT '2026';");
-    } else if (!error) {
-      console.log(">>> [MIGRATION] 'year' column exists on batches. ✓");
-    }
-  } catch (e) {
-    console.log(">>> [MIGRATION] Check skipped:", e.message);
-  }
-})();
-
 // --- API Routes ---
 
 // Get ALL sales data
@@ -457,8 +442,7 @@ app.post('/api/sales', async (req, res) => {
       const batchesToUpsert = batchData.batches.map(batch => ({ 
         id: batch.id, 
         label: batch.label, 
-        thc: batchData.thc[batch.id] || 0,
-        year: batch.year || "2026"
+        thc: batchData.thc[batch.id] || 0 
       })); 
       await upsertData('batches', batchesToUpsert, 'id'); 
       
